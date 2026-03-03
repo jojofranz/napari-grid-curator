@@ -1,0 +1,25 @@
+name: napari-grid-curator
+display_name: Grid Curator
+visibility: public
+categories: ["Annotation", "Segmentation", "Utilities", "Visualization"]
+
+contributions:
+  commands:
+    # Reader for .pkl datasets
+    - id: napari-grid-curator.get_reader
+      python_name: napari_grid_curator._reader:napari_get_reader
+      title: Open dataset with Grid Curator
+    
+    # Main widget
+    - id: napari-grid-curator.make_grid_curator_widget
+      python_name: napari_grid_curator._widget:ExclusionWidget
+      title: Grid Curator
+  
+  readers:
+    - command: napari-grid-curator.get_reader
+      accepts_directories: false
+      filename_patterns: ['*.pkl']
+  
+  widgets:
+    - command: napari-grid-curator.make_grid_curator_widget
+      display_name: Grid Curator

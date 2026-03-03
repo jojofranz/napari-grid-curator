@@ -7,6 +7,7 @@ https://napari.org/stable/plugins/guides.html?#readers
 """
 
 import numpy as np
+import pickle
 
 
 def napari_get_reader(path):
@@ -30,7 +31,7 @@ def napari_get_reader(path):
         path = path[0]
 
     # if we know we cannot read the file, we immediately return None.
-    if not path.endswith(".npy"):
+    if not path.endswith(".pkl"):
         return None
 
     # otherwise we return the *function* that can read ``path``.
@@ -59,15 +60,22 @@ def reader_function(path):
         layer. Both "meta", and "layer_type" are optional. napari will
         default to layer_type=="image" if not provided
     """
-    # handle both a string and a list of strings
-    paths = [path] if isinstance(path, str) else path
-    # load all files into array
-    arrays = [np.load(_path) for _path in paths]
-    # stack arrays into single array
-    data = np.squeeze(np.stack(arrays))
+    # # handle both a string and a list of strings
+    # paths = [path] if isinstance(path, str) else path
+    # # load all files into array
+    # arrays = [np.load(_path) for _path in paths]
+    # # stack arrays into single array
+    # data = np.squeeze(np.stack(arrays))
 
-    # optional kwargs for the corresponding viewer.add_* method
-    add_kwargs = {}
+    # # optional kwargs for the corresponding viewer.add_* method
+    # add_kwargs = {}
 
-    layer_type = "image"  # optional, default is "image"
-    return [(data, add_kwargs, layer_type)]
+    # layer_type = "image"  # optional, default is "image"
+    # return [(data, add_kwargs, layer_type)]
+
+    with open(path, 'rb') as f:
+        dataset = pickle.load(f)
+
+    print(f"INFO: loaded dataset with scenes {list(dataset.keys())}")
+
+    return [(dataset, )]

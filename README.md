@@ -1,48 +1,127 @@
-# napari-rgc
+# napari-grid-curator
 
-[![License MIT](https://img.shields.io/pypi/l/napari-rgc.svg?color=green)](https://github.com/jojofranz/napari-rgc/raw/main/LICENSE)
-[![PyPI](https://img.shields.io/pypi/v/napari-rgc.svg?color=green)](https://pypi.org/project/napari-rgc)
-[![Python Version](https://img.shields.io/pypi/pyversions/napari-rgc.svg?color=green)](https://python.org)
-[![tests](https://github.com/jojofranz/napari-rgc/workflows/tests/badge.svg)](https://github.com/jojofranz/napari-rgc/actions)
-[![codecov](https://codecov.io/gh/jojofranz/napari-rgc/branch/main/graph/badge.svg)](https://codecov.io/gh/jojofranz/napari-rgc)
-[![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-rgc)](https://napari-hub.org/plugins/napari-rgc)
+[![License MIT](https://img.shields.io/pypi/l/napari-grid-curator.svg?color=green)](https://github.com/jojofranz/napari-grid-curator/raw/main/LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/napari-grid-curator.svg?color=green)](https://pypi.org/project/napari-grid-curator)
+[![Python Version](https://img.shields.io/pypi/pyversions/napari-grid-curator.svg?color=green)](https://python.org)
+[![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/napari-grid-curator)](https://napari-hub.org/plugins/napari-grid-curator)
 
-A simple plugin providing interactivity w.r.t. exclusion and classification of cells
+Interactive batch annotation tool for microscopy datasets with tiled grid visualization.
 
 ----------------------------------
 
-This [napari] plugin was generated with [copier] using the [napari-plugin-template].
+## Overview
 
-<!--
-Don't miss the full getting started guide to set up your new package:
-https://github.com/napari/napari-plugin-template#getting-started
+**napari-grid-curator** is a [napari] plugin for efficient manual curation of large microscopy datasets. The key feature is a **tiled grid layout** that displays many segmented objects simultaneously, allowing rapid quality control and annotation.
 
-and review the napari docs for plugin developers:
-https://napari.org/stable/plugins/index.html
--->
+### Key Features
+
+- **Tiled Grid Layout**: View 100+ cells at once in an organized montage
+- **Batch Processing**: Efficiently navigate through thousands of segmented objects
+- **2D & 3D Support**: Works with both 2D image stacks and 3D volumetric data with scrollable Z-stacks
+- **Dual View Modes**:
+  - **Mosaic Mode**: See all cells in batch simultaneously
+  - **Slide Mode**: Navigate cell-by-cell with arrow keys
+- **Interactive Annotation**:
+  - **Alt + Click**: Exclude/include individual cells
+  - **Shift + Click**: Mark cells as positive (thresholding)
+  - **Quick Filters**: DAPI intensity and nearest-neighbor distance sliders
+- **Flexible Data Loading**: 
+  - Legacy mode (all data in single `.pkl`)
+  - Lazy mode (split per-scene `.pkl` files)
+  - Minimal mode (on-the-fly cropping from original `.lif`/`.tif` files)
+- **Multi-channel Thresholding**: Set per-channel thresholds with interactive histograms
+- **Smart Caching**: Efficient caching for large 3D wholebrain datasets
 
 ## Installation
 
-You can install `napari-rgc` via [pip]:
+Install directly from PyPI:
 
-    pip install napari-rgc
+```bash
+pip install napari-grid-curator
+```
 
+Or install latest development version:
 
+```bash
+pip install git+https://github.com/jojofranz/napari-grid-curator.git
+```
 
+## Usage
+
+### From napari GUI
+
+1. Open napari
+2. Go to **Plugins > Grid Curator**
+3. Load your dataset (`.pkl` file)
+4. Use mouse interactions to annotate:
+   - **Alt + Click**: Toggle cell inclusion/exclusion
+   - **Shift + Click**: Mark cell as positive
+5. Set thresholds per channel using histogram widget
+6. Export annotated dataset when done
+
+### Supported Dataset Formats
+
+The plugin works with three dataset modes:
+
+1. **Legacy Mode**: All images stored in single `.pkl` file  
+2. **Lazy Mode**: Images split across per-scene `.pkl` files  
+3. **Minimal Mode**: References to original `.lif` or `.tif` files with on-the-fly cropping
+
+See [DATASET_FORMATS.md](DATASET_FORMATS.md) for detailed format specifications.
+
+### Key Bindings
+
+- **Alt + Click**: Toggle cell exclusion (include/exclude)
+- **Shift + Click**: Toggle positive marker (for thresholding)
+- **Arrow Keys**: Navigate between cells in slide mode (Left/Right)
+- **Mouse Wheel**: Scroll through Z-slices (3D mode)
+
+## Use Cases
+
+This plugin was originally developed for retinal ganglion cell (RGC) analysis but is applicable to:
+
+- Quality control of automated segmentations
+- Manual classification of cell types
+- Thresholding based on marker expression
+- Excluding edge artifacts or missegmented objects
+- Any workflow requiring rapid inspection of many segmented objects
+
+## Development
+
+This plugin was generated using the [napari-plugin-template] and follows napari plugin best practices.
+
+### Dataset Preparation
+
+Your dataset should include:
+- Images (2D or 3D, multi-channel)
+- Segmentation labels
+- Metadata table with regionprops (e.g., from `skimage.measure.regionprops_table`)
+
+The plugin uses bounding boxes to crop regions around each segmented object for efficient visualization.
 
 ## Contributing
 
-Contributions are very welcome. Tests can be run with [tox], please ensure
-the coverage at least stays the same before you submit a pull request.
+Contributions are welcome! Please open an issue or pull request on [GitHub](https://github.com/jojofranz/napari-grid-curator).
 
 ## License
 
-Distributed under the terms of the [MIT] license,
-"napari-rgc" is free and open source software
+Distributed under the terms of the [MIT] license. "napari-grid-curator" is free and open source software.
 
 ## Issues
 
-If you encounter any problems, please [file an issue] along with a detailed description.
+If you encounter any problems, please [file an issue](https://github.com/jojofranz/napari-grid-curator/issues) with:
+- Dataset format and size
+- Full error traceback
+- napari and plugin versions (`napari --info`)
+
+## Acknowledgements
+
+This plugin was developed for wholebrain RGC analysis and uses (amongst others):
+- [napari] for visualization
+- [magicgui] for GUI widgets
+- [napari-clusters-plotter] for histogram visualization
+
+Development of this plugin was funded by [NL-BioImaging AM](https://www.nwo.nl/projecten/184036012) and is happening in at the [MCL](https://www.maastrichtuniversity.nl/research/microscopy-core-lab).
 
 [napari]: https://github.com/napari/napari
 [copier]: https://copier.readthedocs.io/en/stable/
@@ -54,8 +133,9 @@ If you encounter any problems, please [file an issue] along with a detailed desc
 [Apache Software License 2.0]: http://www.apache.org/licenses/LICENSE-2.0
 [Mozilla Public License 2.0]: https://www.mozilla.org/media/MPL/2.0/index.txt
 [napari-plugin-template]: https://github.com/napari/napari-plugin-template
-
-[napari]: https://github.com/napari/napari
 [tox]: https://tox.readthedocs.io/en/latest/
 [pip]: https://pypi.org/project/pip/
 [PyPI]: https://pypi.org/
+[magicgui]: https://github.com/pyapp-kit/magicgui
+[napari-clusters-plotter]: https://github.com/BiAPoL/napari-clusters-plotter
+[MIT]: http://opensource.org/licenses/MIT

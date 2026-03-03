@@ -1,6 +1,6 @@
 import numpy as np
 
-from napari_rgc import napari_get_reader
+from napari_grid_curator import napari_get_reader
 
 
 # tmp_path is a pytest fixture

@@ -1,17 +1,16 @@
 [project]
-name = "napari-rgc"
+name = "napari-grid-curator"
 dynamic = ["version"]
-description = "A simple plugin providing interactivity w.r.t. exclusion and classification of cells"
+description = "Interactive batch annotation tool for microscopy datasets with tiled grid visualization"
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
-  {name = "Johannes Franz"},
-  {email = "johannes.franz@maastrichtuniversity.nl"},
+  {name = "Johannes Franz", email = "johannes.franz@maastrichtuniversity.nl"},
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Framework :: napari",
-    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
@@ -28,21 +27,36 @@ dependencies = [
     "numpy",
     "magicgui",
     "qtpy",
-    "scikit-image",
+    "QtAwesome", 
+    "napari", 
+    "napari-clusters-plotter == 0.8.1",
+    "xlsxwriter",
+    "zarr",
+    "microfilm",
+    "aicsimageio",
+    "readlif>=0.6.4",
+    "connected-components-3d", 
+    "fastremap"
 ]
 
 [project.optional-dependencies]
 testing = [
     "tox",
-    "pytest",  # https://docs.pytest.org/en/latest/contents.html
-    "pytest-cov",  # https://pytest-cov.readthedocs.io/en/latest/
-    "pytest-qt",  # https://pytest-qt.readthedocs.io/en/latest/
+    "pytest",
+    "pytest-cov",
+    "pytest-qt",
     "napari",
     "pyqt5",
 ]
 
+[project.urls]
+Homepage = "https://github.com/jojofranz/napari-grid-curator"
+"Bug Tracker" = "https://github.com/jojofranz/napari-grid-curator/issues"
+Documentation = "https://github.com/jojofranz/napari-grid-curator#readme"
+"Source Code" = "https://github.com/jojofranz/napari-grid-curator"
+
 [project.entry-points."napari.manifest"]
-napari-rgc = "napari_rgc:napari.yaml"
+napari-grid-curator = "napari_grid_curator:napari.yaml"
 
 
 
@@ -61,7 +75,7 @@ where = ["src"]
 
 
 [tool.setuptools_scm]
-write_to = "src/napari_rgc/_version.py"
+write_to = "src/napari_grid_curator/_version.py"
 
 
 [tool.black]
