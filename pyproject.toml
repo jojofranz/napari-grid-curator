@@ -29,7 +29,6 @@ dependencies = [
     "qtpy",
     "QtAwesome", 
     "napari", 
-    "napari-clusters-plotter == 0.8.1",
     "xlsxwriter",
     "zarr",
     "microfilm",

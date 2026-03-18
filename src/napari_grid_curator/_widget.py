@@ -139,7 +139,7 @@ DEPENDENCIES:
 - pandas: DataFrame manipulation
 - numpy/scipy: Numerical operations
 - scikit-image: Image processing (montage)
-- matplotlib: Histogram plotting (via napari-clusters-plotter)
+- matplotlib: Histogram plotting
 - pickle: Dataset serialization
 
 ============================================================================
@@ -190,29 +190,52 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # TODO remove relative import after debugging
 import sys
 import os
+
 folder = os.path.dirname(__file__)
 sys.path.append(folder)
 print(folder)
-# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from proc import partition_images, new_partitions_to_grid, get_new_file_path
-from proc_3d import new_partitions_to_grid_3d
+
+from proc import partition_images, partitions_to_grid, get_new_file_path
+from proc_3d import partitions_to_grid_3d
 from dataset_loader import DatasetLoader
 
-# sys.path.append('C:\Users\johannes.franz\OneDrive - Maastricht University\Documents\projects\birke\napari_grid_curator\src\napari_grid_curator')
-# from .proc import partition_images, partitions_to_grid, get_new_file_path
-
-from napari_clusters_plotter._Qt_code import MplCanvas
-# from .napari_clusters_plotter._Qt_code import MplCanvas
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from qtpy.QtWidgets import QWidget as QtQWidget
+
+class SimpleHistogramCanvas(QtQWidget):
+    """
+    Simple matplotlib canvas for histogram visualization.
+    
+    Replaces the deprecated napari_clusters_plotter.MplCanvas.
+    Provides a minimal interface for displaying histograms with axes access.
+    """
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.figure = Figure(figsize=(5, 4), dpi=100)
+        self.axes = self.figure.add_subplot(111)
+        self.canvas = FigureCanvas(self.figure)
+        
+        from qtpy.QtWidgets import QVBoxLayout
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.canvas)
+        self.setLayout(layout)
+    
+    def draw(self):
+        """Redraw the canvas."""
+        self.canvas.draw()
+
+
 # from qtpy.QtCore import Qt
 # from qtpy.QtGui import QGuiApplication, QIcon
-from napari_clusters_plotter._utilities import (
-    _POINTER,
-    add_column_to_layer_tabular_data,
-    generate_cluster_image,
-    generate_cluster_surface,
-    get_layer_tabular_data,
-)
+# from napari_clusters_plotter._utilities import (
+#     _POINTER,
+#     add_column_to_layer_tabular_data,
+#     generate_cluster_image,
+#     generate_cluster_surface,
+#     get_layer_tabular_data,
+# )
 
 
 # TODO remove after debugging
@@ -417,6 +440,15 @@ negative_color_mpl = (negative_color[0]/255, negative_color[1]/255, negative_col
 positive_color_rgba = (positive_color[0]/255, positive_color[1]/255, positive_color[2]/255, 1)
 negative_color_rgba = (negative_color[0]/255, negative_color[1]/255, negative_color[2]/255, 1)
 
+# Mapping from LIF channel names/emission labels to fluorophore names used in the project
+# Used for display labels in the channel colormap UI.
+emission_to_fluorophore_map = {
+    "Blue": "DAPI",
+    "Green": "BRN3A",
+    "Red": "Islet1",
+    "Magenta": "RBPMS",
+}
+
 
 # Placeholder class for Channels - will be created dynamically from dataset
 # This makes the plugin truly data-agnostic
@@ -553,6 +585,8 @@ class ExclusionWidget(QWidget):
         self.threshold_channel_choices = []  # Will be populated from dataset
         self.threshold_channel_choices_names = []  # Will be populated from dataset
         self.current_threshold_channel = None  # Will be set when dataset loads
+        self.lif_channel_names = []  # Source image channel names (for colormap UI labels)
+        self.overlay_segmentation_boundary = False  # Optional boundary overlay on DAPI
         
         self.threshold_measurements = ["...", 'intensity_mean', 'intensity_max']
         self.current_threshold_measurement = None
@@ -566,103 +600,43 @@ class ExclusionWidget(QWidget):
         self.distance_min_threshold = 0  # Minimum distance to nearest nucleus for inclusion
         self.apply_dapi_filter = False
         self.apply_distance_filter = False
+        self.global_dapi_intensity_min = None
+        self.global_dapi_intensity_max = None
+        self.global_distance_min = None
+        self.global_distance_max = None
 
         self.setup_ui()
         self.viewer = viewer
         self.viewer.reset_view()
 
-        # btn = QPushButton("Save")
-        # btn.clicked.connect(self.save_dataset)
-        # self.setLayout(QHBoxLayout())
-        # self.layout().addWidget(btn)
-
-        # thresholding_layout = QHBoxLayout()
-        # thresholding_layout.addWidget(QLabel("Thresholding :"))
-        # thresholding_widget = Slider(value=50, min=0, max=100, step=1, orientation='horizontal')
-        # thresholding_widget.changed.connect(self.change_threshold)
-        # # self.setLayout(QHBoxLayout())
-        # self.layout().addWidget(thresholding_widget._widget._qwidget)
-
-        # hsl = QSlider()
-        # # self.horizontalSlider.setGeometry(QtCore.QRect(20, 60, 160, 22))
-        # # self.horizontalSlider.setOrientation(QtCore.Qt.Orientation.Horizontal)
-        # # self.horizontalSlider.setObjectName("horizontalSlider")
-        # sbx.valueChanged.connect(self.change_downsampling)
-        # sldr = Slider(value=50, min=0, max=100, step=1, orientation='horizontal')
-        # sldr.changed.connect(self.change_threshold)
-        # self.setLayout(QHBoxLayout())
-        # self.layout().addWidget(sldr)
 
         @self.viewer.mouse_drag_callbacks.append
         def update_partition(layer, event):
-            # self.has_initialized_scene is a crude check that this is sufficiently initialized - could be improved
-            # if 'Alt' in event.modifiers and self.has_initialized_scene:
-            #     print('\n=== Alt-Click Debug ===')
-            #     print(f'Event position: {event.position}')
-                
-            #     try:
-            #         # Simplify: just use rounded event position directly
-            #         position = np.round(event.position).astype(int)
-            #         print(f'Position (rounded): {position}')
-                    
-            #         # Handle ND data properly
-            #         labels_data = self.viewer.layers['all_labels'].data
-            #         print(f'Labels data shape: {labels_data.shape}, ndim: {labels_data.ndim}')
-                    
-            #         if labels_data.ndim == 3:  # 3D data
-            #             # Position is (z, y, x) from the viewer
-            #             z_idx, y_idx, x_idx = position[0], position[1], position[2]
-                        
-            #             # Check if in excluded region (x coordinate is translated)
-            #             if x_idx >= self.excluded_translate[1]:
-            #                 x_idx = x_idx - int(self.excluded_translate[1])
-            #                 print(f'Adjusted for excluded region: x={x_idx}')
-                        
-            #             selected_label = labels_data[z_idx, y_idx, x_idx]
-            #             print(f'Selected label at ({z_idx}, {y_idx}, {x_idx}): {selected_label}')
-                        
-            #         else:  # 2D data
-            #             y_idx, x_idx = position[0], position[1]
-                        
-            #             if x_idx < self.excluded_translate[1]:
-            #                 selected_label = labels_data[y_idx, x_idx]
-            #             else:
-            #                 selected_label = labels_data[y_idx, int(x_idx - self.excluded_translate[1])]
-            #             print(f'Selected label at ({y_idx}, {x_idx}): {selected_label}')
-                    
-            #         if selected_label > 0:
-            #             # adjust dataframe
-            #             if self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['label'] == selected_label, 'exclude'].values[0]:
-            #                 self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['label'] == selected_label, 'exclude'] = False
-            #             else:
-            #                 self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['label'] == selected_label, 'exclude'] = True
-            #             # adjust display
-            #             # could try to make this faster by only changing the relevant parts of the image
-            #             included_images = self.viewer.layers['all'].data.copy()
-            #             included_images[np.isin(self.viewer.layers['all_labels'].data, self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['exclude'] == True, 'label'])] = 0
-            #             self.viewer.layers['included'].data = included_images
-            #             excluded_images = self.viewer.layers['all'].data.copy()
-            #             excluded_images[np.isin(self.viewer.layers['all_labels'].data, self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['exclude'] == False, 'label'])] = 0
-            #             self.viewer.layers['excluded'].data = excluded_images
-            #         else:
-            #             print('Selected background (label 0)')
-                    
-            #     except Exception as e:
-            #         print(f'ERROR in Alt-click handler: {type(e).__name__}: {e}')
-            #         import traceback
-            #         traceback.print_exc()
 
             if 'Alt' in event.modifiers and self.has_initialized_scene:
                 print('\n=== Alt-Click (Tile-Based) Debug ===')
                 print(f'Event position: {event.position}')
                 
                 try:
+                    # Determine which label layer to use based on viewing mode
+                    viewing_mode = getattr(self, 'viewing_mode', ViewingMode.mosaic)
+                    if viewing_mode == ViewingMode.slide:
+                        if 'slide_labels' not in self.viewer.layers:
+                            print("Slide labels layer not found")
+                            return
+                        labels_data = self.viewer.layers['slide_labels'].data
+                    else:
+                        if 'all_labels' not in self.viewer.layers:
+                            print("All labels layer not found")
+                            return
+                        labels_data = self.viewer.layers['all_labels'].data
+                    
                     # Get click position
                     position = np.round(event.position).astype(int)
                     print(f'Position (rounded): {position}')
                     
+                    
                     # Determine if 2D or 3D based on all_labels shape
-                    labels_data = self.viewer.layers['all_labels'].data
                     is_3d = labels_data.ndim == 3
                     
                     # Extract Y, X coordinates (works for both 2D and 3D)
@@ -670,6 +644,30 @@ class ExclusionWidget(QWidget):
                         z_idx, y_idx, x_idx = position[0], position[1], position[2]
                     else:
                         y_idx, x_idx = position[0], position[1]
+
+                    # Slide mode: direct label lookup, no tile/image updates
+                    if viewing_mode == ViewingMode.slide:
+                        if is_3d:
+                            clicked_label = labels_data[z_idx, y_idx, x_idx]
+                        else:
+                            clicked_label = labels_data[y_idx, x_idx]
+
+                        if clicked_label == 0:
+                            print('No label at clicked position (background)')
+                        else:
+                            df_scene = self.dataset[self.current_scene]['df']
+                            label_mask = df_scene['label'] == clicked_label
+                            if not np.any(label_mask):
+                                print(f'Clicked label {clicked_label} not found in DataFrame')
+                                return
+
+                            current_exclude = df_scene.loc[label_mask, 'exclude'].iloc[0]
+                            new_exclude = not current_exclude
+                            df_scene.loc[label_mask, 'exclude'] = new_exclude
+                            print(f'Toggled label {clicked_label} exclude: {current_exclude} -> {new_exclude}')
+                            print('Slide mode: exclusion updated in DataFrame only (no included/excluded tile columns).')
+                            # TODO(slide-mode): add visual feedback for include/exclude status.
+                        return
                     
                     # Check if in excluded region
                     in_excluded = x_idx >= self.excluded_translate[1]
@@ -781,8 +779,20 @@ class ExclusionWidget(QWidget):
                     position = np.round(event.position).astype(int)
                     print(f'Position (rounded): {position}')
                     
+                    # Determine which label layer to use based on viewing mode
+                    viewing_mode = getattr(self, 'viewing_mode', ViewingMode.mosaic)
+                    if viewing_mode == ViewingMode.slide:
+                        if 'slide_labels' not in self.viewer.layers:
+                            print("Slide labels layer not found")
+                            return
+                        labels_data = self.viewer.layers['slide_labels'].data
+                    else:
+                        if 'all_labels' not in self.viewer.layers:
+                            print("All labels layer not found")
+                            return
+                        labels_data = self.viewer.layers['all_labels'].data
+                    
                     # Determine if 2D or 3D
-                    labels_data = self.viewer.layers['all_labels'].data
                     is_3d = labels_data.ndim == 3
                     
                     # Extract Y, X coordinates
@@ -790,6 +800,33 @@ class ExclusionWidget(QWidget):
                         z_idx, y_idx, x_idx = position[0], position[1], position[2]
                     else:
                         y_idx, x_idx = position[0], position[1]
+
+                    # Slide mode: direct label lookup instead of tile index lookup
+                    if viewing_mode == ViewingMode.slide:
+                        if is_3d:
+                            clicked_label = labels_data[z_idx, y_idx, x_idx]
+                        else:
+                            clicked_label = labels_data[y_idx, x_idx]
+
+                        if clicked_label == 0:
+                            print('No label at clicked position (background)')
+                        else:
+                            df = self.dataset[scene]['df']
+                            df_channel = df.loc[df['channel'] == self.current_threshold_channel]
+                            if clicked_label not in df_channel['label'].values:
+                                print(f'Label {clicked_label} not found in current threshold channel')
+                                return
+
+                            current_positive = df_channel.loc[df_channel['label'] == clicked_label, 'positive'].iloc[0]
+                            new_positive = not current_positive
+
+                            df.loc[(df['channel'] == self.current_threshold_channel) &
+                                   (df['label'] == clicked_label), 'positive'] = new_positive
+
+                            print(f'Toggled label {clicked_label} positive: {current_positive} -> {new_positive}')
+                            self.dataset[scene]['df'] = df
+                            self.update_points()
+                        return
                     
                     # Check if in excluded region
                     in_excluded = x_idx >= self.excluded_translate[1]
@@ -854,32 +891,6 @@ class ExclusionWidget(QWidget):
                     print(f'ERROR in Shift-click handler: {type(e).__name__}: {e}')
                     import traceback
                     traceback.print_exc()
-            
-        
-                # print('pressed Shift')
-                # included_position = np.round(event.position).astype(int)
-                # try:
-                #     if included_position[1] < self.excluded_translate[1]:
-                #         selected_label = self.viewer.layers['all_labels'].data[included_position[0], included_position[1]]
-                #     else:
-                #         selected_label = self.viewer.layers['all_labels'].data[included_position[0], int(included_position[1] - self.excluded_translate[1])]
-                #     print(f"INFO: selected label {selected_label}")
-                #     if selected_label > 0:
-                #         # adjust dataframe
-                #         print(self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['label'] == selected_label, 'positive'])
-                #         if self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['label'] == selected_label, 'positive'].values[0]:
-                #             self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['label'] == selected_label, 'positive'] = False
-                #         else:
-                #             self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['label'] == selected_label, 'positive'] = True
-                #         print(self.dataset[self.current_scene]['df'].loc[self.dataset[self.current_scene]['df']['label'] == selected_label, 'positive'])
-                #         # adjust display
-                #         # could try to make this faster by only changing the relevant parts of the image
-                #         self.update_points()
-                #     else:
-                #         pass
-                # except IndexError:
-                #     pass
-
 
 
     def setup_ui(self):
@@ -1325,34 +1336,11 @@ class ExclusionWidget(QWidget):
             'gray', 'hot', 'viridis', 'plasma', 'inferno', 'magma'
         ]
         
-        # Default channel names and cmaps
-        self.default_channel_cmaps = {
-            'DAPI': 'pure_blue',
-            'Channel 1': 'pure_green', 
-            'Channel 2': 'pure_red',
-            'Channel 3': 'pure_cyan',
-            'Channel 4': 'pure_magenta'
-        }
-        
-        # Create dropdowns for each channel (up to 5)
+        # Create channel colormap rows (will be updated to real channel names after dataset load)
         self.channel_cmap_widgets = []
-        channel_names = ['DAPI', 'Channel 1', 'Channel 2', 'Channel 3', 'Channel 4']
-        default_cmaps = ['pure_blue', 'pure_green', 'pure_red', 'pure_cyan', 'pure_magenta']
-        
-        for i, (name, default_cmap) in enumerate(zip(channel_names, default_cmaps)):
-            row_layout = QHBoxLayout()
-            row_layout.addWidget(QLabel(f"{name}:"))
-            
-            cmap_widget = ComboBox(
-                value=default_cmap,
-                choices=self.available_cmaps,
-                label=f"cmap_{i}",
-                name=f"cmap_{i}"
-            )
-            cmap_widget.changed.connect(self.update_channel_cmaps)
-            self.channel_cmap_widgets.append(cmap_widget)
-            row_layout.addWidget(cmap_widget._widget._qwidget)
-            content_layout.addLayout(row_layout)
+        self.channel_cmap_name_labels = []
+        default_channel_names = ['DAPI', 'Channel 1', 'Channel 2', 'Channel 3', 'Channel 4']
+        self._rebuild_channel_cmap_rows(content_layout, default_channel_names)
         
         # Add crop display mode selector
         mode_layout = QHBoxLayout()
@@ -1366,6 +1354,14 @@ class ExclusionWidget(QWidget):
         self.crop_display_mode_widget.changed.connect(self.update_crop_display_mode)
         mode_layout.addWidget(self.crop_display_mode_widget._widget._qwidget)
         content_layout.addLayout(mode_layout)
+
+        # Optional segmentation boundary overlay on DAPI channel
+        boundary_layout = QHBoxLayout()
+        self.overlay_segmentation_checkbox = QCheckBox("Overlay segmentation boundary on DAPI")
+        self.overlay_segmentation_checkbox.setChecked(False)
+        self.overlay_segmentation_checkbox.stateChanged.connect(self.toggle_segmentation_boundary_overlay)
+        boundary_layout.addWidget(self.overlay_segmentation_checkbox)
+        content_layout.addLayout(boundary_layout)
         
         self.crop_display_mode = CropDisplayMode.overlay
         
@@ -1460,6 +1456,54 @@ class ExclusionWidget(QWidget):
         # Reload current batch if initialized
         if self.has_initialized_scene and self.current_scene is not None:
             self.load_batch(self.current_batch)
+
+    def toggle_segmentation_boundary_overlay(self, state):
+        """Enable/disable segmentation boundary overlay on DAPI channel."""
+        self.overlay_segmentation_boundary = (state == 2)
+
+        # Clear cached images and reload
+        if self.dataset_mode == 'minimal' and self.current_scene:
+            self.dataset[self.current_scene]['images'] = None
+
+        if self.has_initialized_scene and self.current_scene is not None:
+            self.load_batch(self.current_batch)
+
+    def _rebuild_channel_cmap_rows(self, parent_layout, channel_names):
+        """(Re)build channel colormap rows using provided channel names."""
+        # Remove previously added channel rows (keep other controls like display mode, z-mode)
+        if hasattr(self, 'channel_cmap_row_layouts'):
+            for row_layout in self.channel_cmap_row_layouts:
+                while row_layout.count():
+                    item = row_layout.takeAt(0)
+                    widget = item.widget()
+                    if widget is not None:
+                        widget.deleteLater()
+                parent_layout.removeItem(row_layout)
+
+        self.channel_cmap_row_layouts = []
+        self.channel_cmap_widgets = []
+        self.channel_cmap_name_labels = []
+
+        default_cmap_cycle = ['pure_blue', 'pure_green', 'pure_red', 'pure_cyan', 'pure_magenta', 'pure_yellow']
+        for i, name in enumerate(channel_names):
+            row_layout = QHBoxLayout()
+            name_label = QLabel(f"{name}:")
+            row_layout.addWidget(name_label)
+
+            default_cmap = default_cmap_cycle[i % len(default_cmap_cycle)]
+            cmap_widget = ComboBox(
+                value=default_cmap,
+                choices=self.available_cmaps,
+                label=f"cmap_{i}",
+                name=f"cmap_{i}"
+            )
+            cmap_widget.changed.connect(self.update_channel_cmaps)
+
+            self.channel_cmap_name_labels.append(name_label)
+            self.channel_cmap_widgets.append(cmap_widget)
+            row_layout.addWidget(cmap_widget._widget._qwidget)
+            parent_layout.addLayout(row_layout)
+            self.channel_cmap_row_layouts.append(row_layout)
 
     def choose_exclusion_metrics_layout(self):
         """
@@ -1699,15 +1743,14 @@ class ExclusionWidget(QWidget):
         """
         Create layout for histogram visualization.
         
-        Uses matplotlib canvas from napari-clusters-plotter to display
-        distribution of selected measurement with threshold marker.
+        Uses SimpleHistogramCanvas to display distribution of selected 
+        measurement with threshold marker.
         
         Returns:
-            QVBoxLayout: Layout containing MplCanvas widget
+            QVBoxLayout: Layout containing SimpleHistogramCanvas widget
         """
         main_layout = QVBoxLayout()
-        self.figure = Figure()
-        self.graphics_widget = MplCanvas()
+        self.graphics_widget = SimpleHistogramCanvas()
         main_layout.addWidget(self.graphics_widget)
         return main_layout
     
@@ -1920,127 +1963,146 @@ class ExclusionWidget(QWidget):
             - Updates scene_choices dropdown
             - Automatically loads first scene
         """
-        try:
-            self.input_file_path = file_path
+        # try:
+        self.input_file_path = file_path
+        
+        # Use DatasetLoader for multi-format support
+        self.dataset_loader = DatasetLoader(file_path)
+        self.dataset = self.dataset_loader.dataset
+        self.dataset_mode = self.dataset_loader.dataset_mode
+        self.ndim = self.dataset_loader.ndim
+        self.scene_choices = self.dataset_loader.scene_names
+        
+        # Display dataset info
+        info = self.dataset_loader.get_dataset_info()
+        print(f"Loaded dataset in '{info['mode']}' mode")
+        print(f"Scenes: {info['n_scenes']}")
+        print(f"Dimensions: {info['ndim']}D")
+        
+        # Update mode label
+        self.dataset_mode_label.setText(f"Dataset mode: {self.dataset_mode} ({self.ndim}D)")
+        
+        # Show crop size controls only for minimal mode
+        if self.dataset_mode == 'minimal':
+            self.crop_size_label.show()
+            self.crop_size_widget._widget._qwidget.show()
+            self.channel_cmaps_container.show()
             
-            # Use DatasetLoader for multi-format support
-            self.dataset_loader = DatasetLoader(file_path)
-            self.dataset = self.dataset_loader.dataset
-            self.dataset_mode = self.dataset_loader.dataset_mode
-            self.ndim = self.dataset_loader.ndim
-            self.scene_choices = self.dataset_loader.scene_names
-            
-            # Display dataset info
-            info = self.dataset_loader.get_dataset_info()
-            print(f"Loaded dataset in '{info['mode']}' mode")
-            print(f"Scenes: {info['n_scenes']}")
-            print(f"Dimensions: {info['ndim']}D")
-            
-            # Update mode label
-            self.dataset_mode_label.setText(f"Dataset mode: {self.dataset_mode} ({self.ndim}D)")
-            
-            # Show crop size controls only for minimal mode
-            if self.dataset_mode == 'minimal':
-                self.crop_size_label.show()
-                self.crop_size_widget._widget._qwidget.show()
-                self.channel_cmaps_container.show()
-                
-                # Update crop_size max based on image dimensions
-                try:
-                    image_size = self.dataset_loader.get_image_size(self.scene_choices[0])
-                    if image_size:
-                        max_crop = min(image_size)  # Use smallest dimension as max
-                        self.crop_size_widget.max = max_crop
-                        print(f"Set crop_size max to {max_crop} based on image size {image_size}")
-                except Exception as e:
-                    print(f"Could not determine image size for crop_size max: {e}")
+            # Update crop_size max based on image dimensions
+            try:
+                image_size = self.dataset_loader.get_image_size(self.scene_choices[0])
+                if image_size:
+                    max_crop = min(image_size)  # Use smallest dimension as max
+                    self.crop_size_widget.max = max_crop
+                    print(f"Set crop_size max to {max_crop} based on image size {image_size}")
+            except Exception as e:
+                print(f"Could not determine image size for crop_size max: {e}")
+        else:
+            self.crop_size_label.hide()
+            self.crop_size_widget._widget._qwidget.hide()
+            self.channel_cmaps_container.hide()
+        
+        # Check for path issues (minimal/lazy modes)
+        if self.dataset_mode in ['lazy', 'minimal']:
+            if self.dataset_mode == 'lazy':
+                missing = self.dataset_loader._validate_paths_lazy()
             else:
-                self.crop_size_label.hide()
-                self.crop_size_widget._widget._qwidget.hide()
-                self.channel_cmaps_container.hide()
+                missing = self.dataset_loader._validate_paths_minimal()
             
-            # Check for path issues (minimal/lazy modes)
-            if self.dataset_mode in ['lazy', 'minimal']:
-                if self.dataset_mode == 'lazy':
-                    missing = self.dataset_loader._validate_paths_lazy()
-                else:
-                    missing = self.dataset_loader._validate_paths_minimal()
-                
-                if missing:
-                    self.fix_paths_btn.setVisible(True)
-                    em = QErrorMessage()
-                    em.showMessage(
-                        f"Warning: Some files are missing:\n{chr(10).join(missing[:5])}\n"
-                        "Click 'Fix Paths' button to resolve."
-                    )
-                else:
-                    self.fix_paths_btn.setVisible(False)
+            if missing:
+                print(f"WARNING: Detected {len(missing)} missing files in dataset paths")
+                self.fix_paths_btn.setVisible(True)
+                em = QErrorMessage()
+                em.showMessage(
+                    f"Warning: Some files are missing:\n{chr(10).join(missing[:5])}\n"
+                    "Click 'Fix Paths' button to resolve."
+                )
             else:
                 self.fix_paths_btn.setVisible(False)
+        else:
+            self.fix_paths_btn.setVisible(False)
+        
+        # Initialize required columns if they don't exist
+        # This ensures compatibility with 3D datasets and datasets from different pipelines
+        columns_initialized = []
+        labels_converted = []
+        for scene_name in self.scene_choices:
+            df = self.dataset[scene_name]['df']
             
-            # Initialize required columns if they don't exist
-            # This ensures compatibility with 3D datasets and datasets from different pipelines
-            columns_initialized = []
-            labels_converted = []
-            for scene_name in self.scene_choices:
-                df = self.dataset[scene_name]['df']
-                
-                # Convert labels to int (fix float64 type mismatch with dict keys)
-                if 'label' in df.columns and df['label'].dtype != np.int64:
-                    df['label'] = df['label'].astype(int)
-                    labels_converted.append(scene_name)
-                
-                # Initialize 'exclude' column if missing
-                if 'exclude' not in df.columns:
-                    df['exclude'] = False
-                    if scene_name not in [scene for scene, col in columns_initialized if col == 'exclude']:
-                        columns_initialized.append((scene_name, 'exclude'))
-                
-                # Initialize 'positive' column if missing
-                if 'positive' not in df.columns:
-                    df['positive'] = False
-                    if scene_name not in [scene for scene, col in columns_initialized if col == 'positive']:
-                        columns_initialized.append((scene_name, 'positive'))
+            # Convert labels to int (fix float64 type mismatch with dict keys)
+            if 'label' in df.columns and df['label'].dtype != np.int64:
+                df['label'] = df['label'].astype(int)
+                labels_converted.append(scene_name)
             
-            # Report what was converted/initialized
-            if labels_converted:
-                print(f"INFO: Converted 'label' column to int for {len(labels_converted)} scene(s) (was float64)")
-                if len(labels_converted) <= 3:
-                    print(f"  Scenes: {', '.join(labels_converted)}")
+            # Initialize 'exclude' column if missing
+            if 'exclude' not in df.columns:
+                df['exclude'] = False
+                if scene_name not in [scene for scene, col in columns_initialized if col == 'exclude']:
+                    columns_initialized.append((scene_name, 'exclude'))
             
-            if columns_initialized:
-                cols_by_type = {}
-                for scene, col in columns_initialized:
-                    if col not in cols_by_type:
-                        cols_by_type[col] = []
-                    cols_by_type[col].append(scene)
-                
-                for col, scenes in cols_by_type.items():
-                    print(f"INFO: Initialized '{col}' column (set to False) for {len(scenes)} scene(s)")
-                    if len(scenes) <= 3:
-                        print(f"  Scenes: {', '.join(scenes)}")
+            # Initialize 'positive' column if missing
+            if 'positive' not in df.columns:
+                df['positive'] = False
+                if scene_name not in [scene for scene, col in columns_initialized if col == 'positive']:
+                    columns_initialized.append((scene_name, 'positive'))
+        
+        # Report what was converted/initialized
+        if labels_converted:
+            print(f"INFO: Converted 'label' column to int for {len(labels_converted)} scene(s) (was float64)")
+            if len(labels_converted) <= 3:
+                print(f"  Scenes: {', '.join(labels_converted)}")
+        
+        if columns_initialized:
+            cols_by_type = {}
+            for scene, col in columns_initialized:
+                if col not in cols_by_type:
+                    cols_by_type[col] = []
+                cols_by_type[col].append(scene)
             
-            # Detect channels and create dynamic Channels enum
-            self._detect_and_create_channels_from_dataset()
-            
-            # Populate UI with detected channels
-            self._populate_threshold_channel_checkboxes()
-            
-            # Update UI
-            self.select_scene_widget.choices = self.scene_choices
-            self.current_scene = self.scene_choices[0]
-            self.load_scene(self.current_scene)
+            for col, scenes in cols_by_type.items():
+                print(f"INFO: Initialized '{col}' column (set to False) for {len(scenes)} scene(s)")
+                if len(scenes) <= 3:
+                    print(f"  Scenes: {', '.join(scenes)}")
 
-        except BaseException as e:
-            print(f"Error loading dataset: {e}")
-            import traceback
-            traceback.print_exc()
-            em = QErrorMessage()
-            em.showMessage(
-                f"Could not load dataset from file {file_path}\n"
-                f"Error: {str(e)}\n"
-                "Check the format and file paths."
-            )   
+        # Initialize global ranges once (do not change during filtering)
+        self._initialize_quality_filter_slider_ranges()
+        
+        # Detect channels and create dynamic Channels enum
+        self._detect_and_create_channels_from_dataset()
+
+        # Update source image channel names (for channel colormap labels)
+        try:
+            self.lif_channel_names = self.dataset_loader.get_scene_channel_names(self.scene_choices[0]) or []
+            if self.lif_channel_names:
+                mapped_channel_names = [emission_to_fluorophore_map.get(ch, ch) for ch in self.lif_channel_names]
+                # Rebuild channel colormap UI rows with actual channel names
+                # Reuse the same content layout created in choose_channel_cmaps_layout()
+                content_layout = self.channel_cmaps_content.layout()
+                # The first items in this layout are channel rows, followed by display mode and z-mode rows
+                # Rebuilding through helper preserves behavior and updates widget count to channel count.
+                self._rebuild_channel_cmap_rows(content_layout, mapped_channel_names)
+                print(f"Using mapped source channel names for colormap UI: {mapped_channel_names}")
+        except Exception as e:
+            print(f"Could not fetch source channel names for colormap UI: {e}")
+        
+        # Populate UI with detected channels
+        self._populate_threshold_channel_checkboxes()
+        
+        # Update UI
+        self.select_scene_widget.choices = self.scene_choices
+        self.current_scene = self.scene_choices[0]
+        self.load_scene(self.current_scene)
+
+        # except BaseException as e:
+        #     print(f"Error loading dataset: {e}")
+        #     import traceback
+        #     traceback.print_exc()
+        #     em = QErrorMessage()
+        #     em.showMessage(
+        #         f"Could not load dataset from file {file_path}\n"
+        #         f"Error: {str(e)}\n"
+        #         "Check the format and file paths."
+        #     )   
 
 
     def load_scene(self, scene_name):
@@ -2077,6 +2139,20 @@ class ExclusionWidget(QWidget):
     def _load_scene(self, scene_name, batch):
         """
         Load and display a scene (or batch of scene) in napari viewer.
+        """
+        try:
+            self._load_scene_impl(scene_name, batch)
+        except Exception as e:
+            print(f"\n❌ FATAL ERROR in _load_scene:")
+            print(f"{type(e).__name__}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            show_info(
+                f"⚠️ Failed to load scene: {str(e)[:150]}")
+    
+    def _load_scene_impl(self, scene_name, batch):
+        """
+        Internal implementation of scene loading (wrapped in try-except by _load_scene).
         
         This is the core display method that:
         1. Applies downsampling to images if configured
@@ -2099,7 +2175,7 @@ class ExclusionWidget(QWidget):
             - Uses deepcopy on images to prevent mutation
             - Applies scipy.ndimage.zoom for downsampling
             - Batch filtering based on label range [batch*size, (batch+1)*size)
-            - Uses new_partitions_to_grid() from proc.py for grid generation
+            - Uses partitions_to_grid() from proc.py for grid generation
             - Excluded grid displayed with horizontal translation offset
             - Slide mode: displays full scene image with cell navigation
         """
@@ -2158,158 +2234,193 @@ class ExclusionWidget(QWidget):
         
         # Load images using dataset loader (handles all three formats)
         print(f"Loading scene '{scene_name}' batch {batch} ({len(batch_labels)} cells) in {self.dataset_mode} mode (3D volume: {load_as_volume})...")
-        if self.dataset_mode == 'minimal':
-            # For minimal mode, use public API which handles both 2D (.lif) and 3D (TIFF/NIfTI/Zarr) formats
-            # Pass batch_labels for efficient on-the-fly cropping (only crop requested labels)
-            display_mode = self.crop_display_mode.name if hasattr(self, 'crop_display_mode') else 'overlay'
-            
-            # Load images
-            all_images = self.dataset_loader.load_scene_images(
-                scene_name, 
-                crop_size=self.crop_size, 
-                display_mode=display_mode.lower() if hasattr(display_mode, 'lower') else display_mode,
-                projection=projection_mode,
-                labels_to_load=batch_labels  # OPTIMIZATION: Only crop requested labels
-            )
-            # No need to filter again - loader already filtered to batch_labels
-            images = {label: deepcopy(all_images[label]) for label in all_images}
-            
-            # Load segmentations for 3D volume mode
-            if load_as_volume:
-                print(f"Loading 3D segmentations for overlay...")
-                segmentations = self.dataset_loader._crop_segmentations_from_3d_files(
-                    scene_name,
-                    crop_size=self.crop_size,
-                    projection='volume',
-                    zero_out_labels=None
-                )
-                # Filter to batch labels
-                segmentations = {label: segmentations[label] for label in batch_labels if label in segmentations}
-            else:
-                segmentations = None
-        else:
-            # For legacy/lazy modes - load all then filter to batch
-            all_images = self.dataset_loader.load_scene_images(scene_name)
-            # Filter to batch labels and make a copy
-            images = {label: deepcopy(all_images[label]) for label in batch_labels if label in all_images}
         
-        # Apply downsampling with parallel processing
-        if self.downsampling_factor > 1:
-            def downsample_image(label_img_tuple):
-                label, img = label_img_tuple
-                downsampled = scipy.ndimage.zoom(
-                    img, 
-                    (1/self.downsampling_factor, 1/self.downsampling_factor, 1), 
-                    order=3, 
-                    mode='nearest'
+        try:
+            if self.dataset_mode == 'minimal':
+                # For minimal mode, use public API which handles both 2D (.lif) and 3D (TIFF/NIfTI/Zarr) formats
+                # Pass batch_labels for efficient on-the-fly cropping (only crop requested labels)
+                display_mode = self.crop_display_mode.name if hasattr(self, 'crop_display_mode') else 'overlay'
+                
+                # Load images
+                all_images = self.dataset_loader.load_scene_images(
+                    scene_name, 
+                    crop_size=self.crop_size, 
+                    display_mode=display_mode.lower() if hasattr(display_mode, 'lower') else display_mode,
+                    projection=projection_mode,
+                    overlay_segmentation=self.overlay_segmentation_boundary,
+                    labels_to_load=batch_labels  # OPTIMIZATION: Only crop requested labels
                 )
-                return label, downsampled
+                # No need to filter again - loader already filtered to batch_labels
+                images = {label: deepcopy(all_images[label]) for label in all_images}
+                
+                # Load segmentations for 3D volume mode
+                if load_as_volume:
+                    print(f"Loading 3D segmentations for overlay...")
+                    segmentations = self.dataset_loader._crop_segmentations_from_3d_files(
+                        scene_name,
+                        crop_size=self.crop_size,
+                        projection='volume',
+                        zero_out_labels=None
+                    )
+                    # Filter to batch labels
+                    segmentations = {label: segmentations[label] for label in batch_labels if label in segmentations}
+                else:
+                    segmentations = None
+            else:
+                # For legacy/lazy modes - load all then filter to batch
+                all_images = self.dataset_loader.load_scene_images(scene_name)
+                # Filter to batch labels and make a copy
+                images = {label: deepcopy(all_images[label]) for label in batch_labels if label in all_images}
             
-            # Parallel downsampling
-            downsampled_images = {}
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {executor.submit(downsample_image, item): item[0] for item in images.items()}
-                for future in progress(as_completed(futures), total=len(futures), desc="Downsampling images"):
-                    label, downsampled_img = future.result()
-                    downsampled_images[label] = downsampled_img
-            images = downsampled_images
-        else:
-            # No downsampling, just filter
-            images = {label: img for label, img in images.items() if label in df['label'].values}
+            # Apply downsampling with parallel processing
+            if self.downsampling_factor > 1:
+                def downsample_image(label_img_tuple):
+                    label, img = label_img_tuple
+                    downsampled = scipy.ndimage.zoom(
+                        img, 
+                        (1/self.downsampling_factor, 1/self.downsampling_factor, 1), 
+                        order=3, 
+                        mode='nearest'
+                    )
+                    return label, downsampled
+                
+                # Parallel downsampling
+                downsampled_images = {}
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = {executor.submit(downsample_image, item): item[0] for item in images.items()}
+                    for future in progress(as_completed(futures), total=len(futures), desc="Downsampling images"):
+                        label, downsampled_img = future.result()
+                        downsampled_images[label] = downsampled_img
+                images = downsampled_images
+            else:
+                # No downsampling, just filter
+                images = {label: img for label, img in images.items() if label in df['label'].values}
 
-        included_labels, excluded_labels = partition_images(df)
-        
-        # Get unique labels for grid
-        # After dataset loading, 'label' is always the correct column (instance_label was renamed to label for relabel mode)
-        labels = df['label'].drop_duplicates().values.astype(int)
-        
-        # Store actual tile dimensions from loaded images (accounts for montage mode)
-        # In montage mode, each image is already arranged as channel grid, so shape reflects that
-        first_label = labels[0]
-        if first_label in images:
-            first_img = images[first_label]
-            if first_img.ndim >= 2:
-                self.current_tile_h = first_img.shape[0]
-                self.current_tile_w = first_img.shape[1]
+            included_labels, excluded_labels = partition_images(df)
+            
+            # Get unique labels for grid
+            # After dataset loading, 'label' is always the correct column (instance_label was renamed to label for relabel mode)
+            labels = df['label'].drop_duplicates().values.astype(int)
+            
+            # Store actual tile dimensions from loaded images (accounts for montage mode)
+            # In montage mode, each image is already arranged as channel grid, so shape reflects that
+            first_label = labels[0]
+            if first_label in images:
+                first_img = images[first_label]
+                if first_img.ndim >= 2:
+                    self.current_tile_h = first_img.shape[0]
+                    self.current_tile_w = first_img.shape[1]
+                else:
+                    # Fallback to crop_size
+                    self.current_tile_h = self.crop_size
+                    self.current_tile_w = self.crop_size
             else:
-                # Fallback to crop_size
+                # Fallback to crop_size if no images
                 self.current_tile_h = self.crop_size
                 self.current_tile_w = self.crop_size
-        else:
-            # Fallback to crop_size if no images
-            self.current_tile_h = self.crop_size
-            self.current_tile_w = self.crop_size
-        
-        print(f'Actual tile dimensions: {self.current_tile_h} x {self.current_tile_w}')
-        print(f'labels for grid: {labels}')
-        
-        # Create grid based on dimensionality
-        if load_as_volume:
-            # 3D volume mode - create 3D montage with segmentation overlay
-            print(f"Creating 3D montage with {len(images)} volumes and {len(segmentations)} segmentation masks...")
-            (all_images_grid, all_labels_grid, coords, 
-             included_images, excluded_images,
-             included_labels_grid, excluded_labels_grid) = new_partitions_to_grid_3d(
-                images, segmentations, labels, included_labels, excluded_labels, cols=self.n_cols
-            )
-        else:
-            # 2D mode - use standard 2D montage
-            all_images_grid, all_labels, coords, included_images, excluded_images = new_partitions_to_grid(
-                images, labels, included_labels, excluded_labels, cols=self.n_cols
-            )
-            all_labels_grid = all_labels
-            included_labels_grid = None
-            excluded_labels_grid = None
-        
-        # Calculate translation for excluded grid
-        if load_as_volume:
-            # For 3D, get Y dimension (axis 1)
-            excluded_translate = (0, included_images.shape[1] + (included_images.shape[1]/self.n_cols))
-        else:
-            # For 2D
-            excluded_translate = (0, included_images.shape[1] + (included_images.shape[1]/self.n_cols))
-        self.excluded_translate = excluded_translate
-
-        self.current_scene = scene_name
-
-        # Create image layers
-        self.get_create_layer(self.viewer, all_images_grid, 'all', visible=False, translate=[0, 0], layer_type='image')
-        self.get_create_layer(self.viewer, included_images, 'included', visible=True, translate=[0, 0], layer_type='image')
-        self.get_create_layer(self.viewer, excluded_images, 'excluded', visible=True, translate=excluded_translate, layer_type='image')
-        
-        # Create label layers (above images, below points)
-        if load_as_volume:
-            # 3D mode: create separate label layers for included/excluded with proper overlay
-            self.get_create_layer(self.viewer, all_labels_grid, 'all_labels', visible=False, translate=[0, 0], layer_type='labels')
-            self.get_create_layer(self.viewer, included_labels_grid, 'included_labels', visible=True, translate=[0, 0], layer_type='labels')
-            self.get_create_layer(self.viewer, excluded_labels_grid, 'excluded_labels', visible=True, translate=excluded_translate, layer_type='labels')
             
-            # Make labels semi-transparent
-            if 'included_labels' in self.viewer.layers:
-                self.viewer.layers['included_labels'].opacity = 0.5
-            if 'excluded_labels' in self.viewer.layers:
-                self.viewer.layers['excluded_labels'].opacity = 0.5
-        else:
-            # 2D mode: single labels layer
-            self.get_create_layer(self.viewer, all_labels_grid, 'all_labels', visible=False, translate=[0, 0], layer_type='labels')
+            print(f'Actual tile dimensions: {self.current_tile_h} x {self.current_tile_w}')
+            print(f'labels for grid: {labels}')
+            
+            # Create grid based on dimensionality
+            if load_as_volume:
+                # 3D volume mode - create 3D montage with segmentation overlay
+                print(f"Creating 3D montage with {len(images)} volumes and {len(segmentations)} segmentation masks...")
+                (all_images_grid, all_labels_grid, coords, 
+                 included_images, excluded_images,
+                 included_labels_grid, excluded_labels_grid) = partitions_to_grid_3d(
+                    images, segmentations, labels, included_labels, excluded_labels, cols=self.n_cols
+                )
+            else:
+                # 2D mode - use standard 2D montage
+                all_images_grid, all_labels, coords, included_images, excluded_images = partitions_to_grid(
+                    images, labels, included_labels, excluded_labels, cols=self.n_cols
+                )
+                all_labels_grid = all_labels
+                included_labels_grid = None
+                excluded_labels_grid = None
+            
+            # Calculate translation for excluded grid
+            if load_as_volume:
+                # For 3D, get Y dimension (axis 1)
+                excluded_translate = (0, included_images.shape[1] + (included_images.shape[1]/self.n_cols))
+            else:
+                # For 2D
+                excluded_translate = (0, included_images.shape[1] + (included_images.shape[1]/self.n_cols))
+            self.excluded_translate = excluded_translate
+
+            self.current_scene = scene_name
+
+            # Create image layers
+            self.get_create_layer(self.viewer, all_images_grid, 'all', visible=False, translate=[0, 0], layer_type='image')
+            self.get_create_layer(self.viewer, included_images, 'included', visible=True, translate=[0, 0], layer_type='image')
+            self.get_create_layer(self.viewer, excluded_images, 'excluded', visible=True, translate=excluded_translate, layer_type='image')
+            
+            # Create label layers (above images, below points)
+            if load_as_volume:
+                # 3D mode: create separate label layers for included/excluded with proper overlay
+                self.get_create_layer(self.viewer, all_labels_grid, 'all_labels', visible=False, translate=[0, 0], layer_type='labels')
+                self.get_create_layer(self.viewer, included_labels_grid, 'included_labels', visible=True, translate=[0, 0], layer_type='labels')
+                self.get_create_layer(self.viewer, excluded_labels_grid, 'excluded_labels', visible=True, translate=excluded_translate, layer_type='labels')
+                
+                # Make labels semi-transparent
+                if 'included_labels' in self.viewer.layers:
+                    self.viewer.layers['included_labels'].opacity = 0.5
+                if 'excluded_labels' in self.viewer.layers:
+                    self.viewer.layers['excluded_labels'].opacity = 0.5
+            else:
+                # 2D mode: single labels layer
+                self.get_create_layer(self.viewer, all_labels_grid, 'all_labels', visible=False, translate=[0, 0], layer_type='labels')
+            
+            # Create points layer (on top)
+            self.coords = coords
+            all_coords = np.vstack([coords, coords + excluded_translate])
+            print(f"Creating points layer with {len(all_coords)} points...")
+            self.get_create_layer(self.viewer, all_coords, 'points', visible=True, translate=[0, 0], layer_type='points')
+            
+            print(f"Updating points for scene '{scene_name}'...")
+            self.update_points()
+            print(f"✓ Points updated successfully")
+            self.has_initialized_scene = True
+            
+            print(f"Ensuring proper layer ordering...")
+            # Ensure proper layer ordering: images < labels < points
+            self._ensure_layer_ordering()
+            print(f"✓ Layer ordering established")
+            
+            print(f"Restoring camera state...")
+            # Restore camera state if it was preserved
+            if camera_center is not None and camera_zoom is not None:
+                self.viewer.camera.center = camera_center
+                self.viewer.camera.zoom = camera_zoom
+            else:
+                # Force viewer refresh only on first load
+                self.viewer.reset_view()
+            
+            print(f"✓ Scene '{scene_name}' loaded successfully!\n")
         
-        # Create points layer (on top)
-        self.coords = coords
-        all_coords = np.vstack([coords, coords + excluded_translate])
-        self.get_create_layer(self.viewer, all_coords, 'points', visible=True, translate=[0, 0], layer_type='points')
-        self.update_points()
-        self.has_initialized_scene = True
-        
-        # Ensure proper layer ordering: images < labels < points
-        self._ensure_layer_ordering()
-        
-        # Restore camera state if it was preserved
-        if camera_center is not None and camera_zoom is not None:
-            self.viewer.camera.center = camera_center
-            self.viewer.camera.zoom = camera_zoom
-        else:
-            # Force viewer refresh only on first load
-            self.viewer.reset_view()
+        except (FileNotFoundError, RuntimeError) as e:
+            error_message = str(e)
+            print(f"\n❌ FileNotFoundError/RuntimeError loading scene '{scene_name}':")
+            print(f"{error_message}")
+            import traceback
+            traceback.print_exc()
+            show_info(
+                f"⚠️ Error loading scene: {error_message[:200]}")
+            return
+        except Exception as e:
+            print(f"\n❌ UNEXPECTED ERROR loading scene '{scene_name}':")
+            print(f"{type(e).__name__}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            error_message = (
+                f"Unexpected error loading scene '{scene_name}':\n{str(e)}\n\n"
+                "This might be a bug. Please report with the error details above."
+            )
+            show_info(
+                f"⚠️ Unexpected error: {str(e)[:100]}...")
+            return
     
     def _ensure_layer_ordering(self):
         """
@@ -2844,6 +2955,88 @@ class ExclusionWidget(QWidget):
         if self.apply_distance_filter and self.dataset is not None:
             self.apply_quality_filters()
 
+    def _initialize_quality_filter_slider_ranges(self):
+        """
+        Compute global min/max for quick quality filters once per dataset load.
+
+        This intentionally avoids changing slider bounds during filtering,
+        which can make UI behavior unstable and scene-order dependent.
+        """
+        if self.dataset is None:
+            return
+
+        dapi_values = []
+        distance_values = []
+        distance_cols = ['distance to nearest neighbour', 'distance to border']
+
+        for scene in self.scene_choices:
+            if scene == "...":
+                continue
+
+            df = self.dataset[scene]['df']
+
+            # Global DAPI intensity range from DAPI_inside / intensity_mean
+            if 'channel' in df.columns and 'intensity_mean' in df.columns:
+                dapi_scene = df.loc[df['channel'] == 'DAPI_inside', 'intensity_mean'].dropna()
+                if len(dapi_scene) > 0:
+                    dapi_values.append(dapi_scene.to_numpy())
+
+            # Global distance range across available distance columns
+            for distance_col in distance_cols:
+                if distance_col in df.columns:
+                    dist_scene = df[distance_col].dropna()
+                    if len(dist_scene) > 0:
+                        distance_values.append(dist_scene.to_numpy())
+
+        # Configure DAPI slider bounds
+        if dapi_values:
+            all_dapi = np.concatenate(dapi_values)
+            dapi_min = int(np.floor(np.min(all_dapi)))
+            dapi_max = int(np.ceil(np.max(all_dapi)))
+
+            if dapi_max <= dapi_min:
+                dapi_max = dapi_min + 1
+
+            dapi_min = dapi_min - int(np.floor((dapi_max-dapi_min) * .1))  # add 10% margin
+            dapi_max = dapi_max + int(np.floor((dapi_max-dapi_min) * .1))  # add 10% margin
+
+            self.global_dapi_intensity_min = dapi_min
+            self.global_dapi_intensity_max = dapi_max
+            self.dapi_intensity_slider.setMinimum(dapi_min)
+            self.dapi_intensity_slider.setMaximum(dapi_max)
+
+            clamped_dapi = int(np.clip(self.dapi_intensity_min_threshold, dapi_min, dapi_max))
+            self.dapi_intensity_min_threshold = clamped_dapi
+            self.dapi_intensity_slider.value = clamped_dapi
+
+            print(f"Initialized global DAPI filter range: [{dapi_min}, {dapi_max}]")
+        else:
+            print("WARNING: Could not initialize DAPI filter range (no DAPI_inside/intensity_mean data found)")
+
+        # Configure distance slider bounds
+        if distance_values:
+            all_dist = np.concatenate(distance_values)
+            dist_min = int(np.floor(np.min(all_dist)))
+            dist_max = int(np.ceil(np.max(all_dist)))
+            if dist_max <= dist_min:
+                dist_max = dist_min + 1
+
+            dist_min = dist_min - int(np.floor((dist_max-dist_min) * .1))  # add 10% margin
+            dist_max = dist_max + int(np.floor((dist_max-dist_min) * .1))  # add 10% margin
+
+            self.global_distance_min = dist_min
+            self.global_distance_max = dist_max
+            self.distance_slider.setMinimum(dist_min)
+            self.distance_slider.setMaximum(dist_max)
+
+            clamped_dist = int(np.clip(self.distance_min_threshold, dist_min, dist_max))
+            self.distance_min_threshold = clamped_dist
+            self.distance_slider.value = clamped_dist
+
+            print(f"Initialized global distance filter range: [{dist_min}, {dist_max}]")
+        else:
+            print("WARNING: Could not initialize distance filter range (no distance columns found)")
+
     def apply_quality_filters(self):
         """
         Apply DAPI intensity and/or distance filters to all scenes (NEW FEATURE).
@@ -2855,7 +3048,6 @@ class ExclusionWidget(QWidget):
         Side Effects:
             - Updates 'exclude' column in all scene DataFrames
             - Reloads current batch to show updated exclusions
-            - Updates slider ranges based on data if not yet set
         """
         for scene in self.scene_choices:
             if scene == "...":
@@ -2877,16 +3069,6 @@ class ExclusionWidget(QWidget):
                 # Filter on DAPI_inside channel, intensity_mean measurement
                 dapi_mask = df['channel'] == 'DAPI_inside'
                 if dapi_mask.any() and 'intensity_mean' in df.columns:
-                    # # Update slider range if this is first time
-                    # if self.dapi_intensity_slider.max == 10000:
-                    #     dapi_max = df.loc[dapi_mask, 'intensity_mean'].max()
-                    #     self.dapi_intensity_slider.max = int(dapi_max) + 100
-
-                    dapi_max = df.loc[dapi_mask, 'intensity_mean'].max()
-                    dapi_min = df.loc[dapi_mask, 'intensity_mean'].min()
-                    self.dapi_intensity_slider.setMaximum(int(dapi_max) + int(dapi_max * 0.1))  # Add 10% headroom
-                    self.dapi_intensity_slider.setMinimum(int(dapi_min) - int(dapi_min * 0.1))  # Add 10% floor
-                        
                     # Mark as excluded if DAPI intensity too low
                     low_dapi = dapi_mask & (df['intensity_mean'] < self.dapi_intensity_min_threshold)
                     # Need to propagate exclusion to all channels for same label
@@ -2899,16 +3081,6 @@ class ExclusionWidget(QWidget):
                 distance_cols = ['distance to nearest neighbour', 'distance to border']
                 for distance_col in distance_cols:
                     if distance_col in df.columns:
-                        # # Update slider range if this is first time
-                        # if self.distance_slider.max == 100:
-                        #     dist_max = df[distance_col].max()
-                        #     self.distance_slider.max = int(dist_max) + 10
-
-                        dist_max = df[distance_col].max()
-                        dist_min = df[distance_col].min()
-                        self.distance_slider.setMaximum(int(dist_max) + int(dist_max * 0.1))  # Add 10% headroom
-                        self.distance_slider.setMinimum(int(dist_min) - int(dist_min * 0.1))  # Add 10% floor
-                        
                         # Mark as excluded if distance too small
                         # Distance is typically the same across channels for a given label
                         close_nuclei = df[distance_col] < self.distance_min_threshold
@@ -2944,13 +3116,6 @@ class ExclusionWidget(QWidget):
         self.select_threshold_channel_widget.choices = self.threshold_channel_choices_names
         if self.threshold_channel_choices_names:
             self.select_threshold_channel_widget.value = self.select_threshold_channel_widget.choices[0]
-        # self.select_threshold_channel_choices_widget.height = self.select_dataset_widget.height
-        # print(self.viewer.window._qt_viewer.console._control.font())
-        # print(self.viewer.window._qt_viewer.console._control.fontPointSize())
-        # print(self.viewer.window._qt_viewer.console._control.size())
-        # print(self.viewer.window._qt_viewer.console._control.font().pixelSize())
-        # print(self.viewer.window._qt_viewer.console._control.font().pointSize())
-        # print(self.viewer.window._qt_viewer.console._control.font().pointSizeF())
 
 
     def update_threshold_channel(self, channel):
@@ -3053,69 +3218,6 @@ class ExclusionWidget(QWidget):
         
         # Update canvas
         self.graphics_widget.draw()
-
-
-    # def update_threshold_spinbox(self, value):
-    #     """
-    #     Apply new threshold value from spinbox input.
-        
-    #     Updates positivity status for all scenes based on the threshold:
-    #     nuclei with measurement > threshold are marked as positive.
-        
-    #     Parameters:
-    #         value (float): Threshold value in actual measurement units
-            
-    #     Side Effects:
-    #         - Updates 'positive' column in all scene DataFrames
-    #         - Updates histogram x-axis ticks to show threshold position
-    #         - Updates point overlay to reflect new positivity status
-            
-    #     Returns:
-    #         None if measurement column doesn't exist in current scene
-    #     """
-
-    #     if self.current_threshold_measurement not in self.dataset[self.current_scene]['df'].columns:
-    #         em = QErrorMessage()
-    #         em.showMessage(
-    #             f"Could not find measurement {self.current_threshold_measurement} in scene {self.current_scene}"
-    #         )
-    #         return None
-    #     mask = self.dataset[self.current_scene]['df']['channel'] == self.current_threshold_channel
-    #     threshold = value
-    #     vmax = self.dataset[self.current_scene]['df'].loc[mask, self.current_threshold_measurement].max()
-    #     vmin = self.dataset[self.current_scene]['df'].loc[mask, self.current_threshold_measurement].min()
-
-    #     ticks = np.linspace(vmin, vmax, 10)
-    #     if vmax - vmin > 50:
-    #         ticks = ticks.astype(int)
-    #     ticks = np.sort(np.append(ticks, threshold))
-    #     labels = ticks.astype(str)
-    #     labels[labels == str(threshold)] = 'T'
-
-    #     # self.graphics_widget.axes.set_xticks([threshold], ['threshold'])
-    #     self.graphics_widget.axes.set_xticks(ticks, labels)
-    #     self.graphics_widget.axes.figure.canvas.draw_idle()
-
-    #     for scene in self.scene_choices:
-    #         if not scene == "...":
-
-    #             # initialize to False, only if the column does not exist yet
-    #             if not 'positive' in self.dataset[scene]['df'].columns:
-    #                 self.dataset[scene]['df']['positive'] = False
-
-    #             df = self.dataset[scene]['df']
-    #             mask = df['channel'] == self.current_threshold_channel
-
-    #             df.loc[mask & (df[self.current_threshold_measurement] > threshold), 'positive'] = True
-    #             df.loc[mask & (df[self.current_threshold_measurement] <= threshold), 'positive'] = False
-
-    #             df = self.dataset[scene]['df']
-    #             mask = df['channel'] == self.current_threshold_channel
-    #             start, stop = self.current_batch * self.batch_size, (self.current_batch + 1) * self.batch_size
-    #             mask = np.logical_and.reduce([mask, df['label'] >= start, df['label'] < stop])
-
-    #     # update points
-    #     self.update_points()
 
 
     def update_threshold(self, value):
@@ -3260,25 +3362,62 @@ class ExclusionWidget(QWidget):
             
             # In slide mode, show all cells; in mosaic mode, filter by batch
             if hasattr(self, 'viewing_mode') and self.viewing_mode == ViewingMode.slide:
-                # Slide mode: show all cells in the scene
-                mask = np.ones(len(df), dtype=bool)
+                # Slide mode: df is already filtered to current threshold channel
+                if self.current_threshold_measurement is None or self.current_threshold_measurement == "...":
+                    values = np.array(['nan'] * len(df))
+                else:
+                    values = df[self.current_threshold_measurement].values.copy()
+                    values = np.round(values, 0).astype(int)
+                positive = df['positive'].values.copy()
+                positive = positive.astype(int)
             else:
                 # Mosaic mode: filter by current batch labels (not by value range!)
                 # Use stored batch_labels from _load_scene() to ensure consistency
                 if hasattr(self, 'current_batch_labels'):
-                    mask = df['label'].isin(self.current_batch_labels)
+                    # Check if all batch labels exist in the filtered DataFrame
+                    expected_labels = set(self.current_batch_labels)
+                    actual_labels = set(df['label'].unique())
+                    missing_labels = expected_labels - actual_labels
+                    
+                    if missing_labels:
+                        print(f"  ⚠️ DATA INTEGRITY WARNING: {len(missing_labels)} labels missing from channel '{self.current_threshold_channel}':")
+                        print(f"     Missing labels: {sorted(missing_labels)}")
+                        print(f"     This indicates incomplete measurements - these cells will be shown as 'nan'")
+                    
+                    # Create values and positive arrays aligned with current_batch_labels order
+                    # This ensures indices match self.coords positions
+                    values = []
+                    positive = []
+                    
+                    for label in self.current_batch_labels:
+                        label_rows = df[df['label'] == label]
+                        if len(label_rows) == 0:
+                            # Label missing from this channel - insert placeholder
+                            values.append('nan')
+                            positive.append(0)
+                        else:
+                            # Label exists - extract measurement
+                            if self.current_threshold_measurement is None or self.current_threshold_measurement == "...":
+                                values.append('nan')
+                            else:
+                                val = label_rows[self.current_threshold_measurement].iloc[0]
+                                values.append(int(np.round(val, 0)))
+                            pos = label_rows['positive'].iloc[0]
+                            positive.append(int(pos))
+                    
+                    values = np.array(values)
+                    positive = np.array(positive, dtype=int)
                 else:
                     # Fallback if current_batch_labels not set (shouldn't happen)
                     print("  WARNING: current_batch_labels not set, using all labels")
-                    mask = np.ones(len(df), dtype=bool)
-            if self.current_threshold_measurement is None or self.current_threshold_measurement == "...":
-                # allow shift-click before selecting a measurement
-                values = np.array(['nan'] * mask.sum())
-            else:
-                values = df.loc[mask, self.current_threshold_measurement].values.copy()
-                values = np.round(values, 0).astype(int)  # TODO parameterize this
-            positive = df.loc[mask, 'positive'].values.copy()
-            positive = positive.astype(int)
+                    mask = df['label'].isin(df['label'].unique())
+                    if self.current_threshold_measurement is None or self.current_threshold_measurement == "...":
+                        values = np.array(['nan'] * mask.sum())
+                    else:
+                        values = df.loc[mask, self.current_threshold_measurement].values.copy()
+                        values = np.round(values, 0).astype(int)
+                    positive = df.loc[mask, 'positive'].values.copy()
+                    positive = positive.astype(int)
 
             # Use customizable colors for positive/negative points
             face_color_cycle = np.array([f'#{int(negative_color[0]):02x}{int(negative_color[1]):02x}{int(negative_color[2]):02x}', 
@@ -3287,7 +3426,16 @@ class ExclusionWidget(QWidget):
             face_color_cycle_rgb = np.array([[negative_color_rgba[0], negative_color_rgba[1], negative_color_rgba[2], 0], 
                                             [positive_color_rgba[0], positive_color_rgba[1], positive_color_rgba[2], 0]])  # hide dots
             
-            values = [str(v) for (v, p) in zip(values, positive)]
+            # Convert values to strings for display
+            values = [str(v) for v in values]
+            
+            # Verify alignment (should always match now)
+            if hasattr(self, 'coords') and not (hasattr(self, 'viewing_mode') and self.viewing_mode == ViewingMode.slide):
+                expected_count = len(self.coords)
+                actual_count = len(values)
+                if expected_count != actual_count:
+                    print(f"  ⚠️ ALIGNMENT ERROR: Expected {expected_count} values but got {actual_count}")
+                    print(f"     This should not happen with the new alignment logic!")
             
             # Choose coordinates and features based on viewing mode
             if hasattr(self, 'viewing_mode') and self.viewing_mode == ViewingMode.slide:
@@ -3295,7 +3443,7 @@ class ExclusionWidget(QWidget):
                 # Get cell centers for the cells in the current view
                 cell_centers = np.array([[(row['bbox-0'] + row['bbox-2']) / 2, 
                                           (row['bbox-1'] + row['bbox-3']) / 2] 
-                                         for idx, row in df.loc[mask].iterrows()])
+                                         for idx, row in df.iterrows()])
                 all_coords = cell_centers
                 # In slide mode, we don't duplicate for included/excluded
                 features = {
@@ -3421,47 +3569,111 @@ class ExclusionWidget(QWidget):
             - Only includes non-excluded nuclei
             - Merges DataFrames by label to align positivity across channels
         """    
-        combinations = np.array(np.meshgrid(*([[False, True]] * len(self.threshold_channel_choices)))).T.reshape(-1, len(self.threshold_channel_choices))
+        # combinations = np.array(np.meshgrid(*([[False, True]] * len(self.threshold_channel_choices)))).T.reshape(-1, len(self.threshold_channel_choices))
+        # summery_per_scene = []
+        # for scene in self.scene_choices:
+        #     df = self.dataset[scene]['df']
+
+        #     if not 'positive' in df.columns:
+        #         print(f"Warning: 'positive' column not found for scene {scene}. Initializing to False.")
+        #         df['positive'] = False
+
+        #     df = df.loc[df['exclude'] == False]
+        #     dfs_sub = []
+        #     # for combination in combinations:
+        #     for threshold_channel in self.threshold_channel_choices_names:
+
+        #         df_sub = df.loc[df['channel'] == threshold_channel]
+
+
+                
+        #         df_sub = df_sub[['label', 'positive']]
+        #         df_sub = df_sub.rename(columns={'positive': threshold_channel})
+        #         dfs_sub.append(df_sub)
+
+        #     from functools import reduce
+        #     df = reduce(lambda  left, right: pd.merge(left, right, on=['label'],
+        #                                     how='outer'), dfs_sub)
+        #     order = ['label'] + self.threshold_channel_choices_names
+        #     df = df[order]
+        #     classification = []
+        #     for i, row in df.iterrows():
+        #         classification.append(np.where(np.all(combinations == np.array(row[1:]), axis=1))[0][0])
+        #     u, c = np.unique(classification, return_counts=True)
+        #     cc = np.zeros(len(combinations))
+        #     cc[u] = c
+        #     df = {channel: combinations[:, i] for i, channel in enumerate(self.threshold_channel_choices_names)}
+        #     df['scene'] = scene
+        #     df['count'] = cc
+        #     df = pd.DataFrame(df)
+        #     summery_per_scene.append(df)
+
+        # summery_per_scene = pd.concat(summery_per_scene)
+        
+        # writer = pd.ExcelWriter(out_fn, engine='xlsxwriter')
+        # summery_per_scene.to_excel(writer, sheet_name='summary')
+        # writer.close()
+        # return out_fn
+        combinations = np.array(
+            np.meshgrid(*([[False, True]] * len(self.threshold_channel_choices)))
+        ).T.reshape(-1, len(self.threshold_channel_choices))
         summery_per_scene = []
+
         for scene in self.scene_choices:
             df = self.dataset[scene]['df']
 
-            if not 'positive' in df.columns:
+            if 'positive' not in df.columns:
                 print(f"Warning: 'positive' column not found for scene {scene}. Initializing to False.")
                 df['positive'] = False
 
             df = df.loc[df['exclude'] == False]
             dfs_sub = []
-            # for combination in combinations:
             for threshold_channel in self.threshold_channel_choices_names:
-
-                df_sub = df.loc[df['channel'] == threshold_channel]
-
-
-                
-                df_sub = df_sub[['label', 'positive']]
+                df_sub = df.loc[df['channel'] == threshold_channel, ['label', 'positive']].copy()
+                # avoid duplicate-label expansion during merge
+                df_sub = df_sub.drop_duplicates(subset=['label'], keep='first')
                 df_sub = df_sub.rename(columns={'positive': threshold_channel})
                 dfs_sub.append(df_sub)
 
             from functools import reduce
-            df = reduce(lambda  left, right: pd.merge(left, right, on=['label'],
-                                            how='outer'), dfs_sub)
+            df = reduce(lambda left, right: pd.merge(left, right, on=['label'], how='outer'), dfs_sub)
+
             order = ['label'] + self.threshold_channel_choices_names
+            for ch in self.threshold_channel_choices_names:
+                if ch not in df.columns:
+                    df[ch] = False
             df = df[order]
+
+            # critical fix: missing channel measurements -> False
+            if df[self.threshold_channel_choices_names].isna().any().any():
+                n_missing = int(df[self.threshold_channel_choices_names].isna().sum().sum())
+                print(f"WARNING: write_summary: scene '{scene}' has {n_missing} missing channel entries; filling NaN -> False")
+
+            df[self.threshold_channel_choices_names] = (
+                df[self.threshold_channel_choices_names]
+                .fillna(False)
+                .astype(bool)
+            )
+
             classification = []
-            for i, row in df.iterrows():
-                classification.append(np.where(np.all(combinations == np.array(row[1:]), axis=1))[0][0])
+            for _, row in df.iterrows():
+                row_bool = row[self.threshold_channel_choices_names].to_numpy(dtype=bool)
+                idx = np.where(np.all(combinations == row_bool, axis=1))[0]
+                if len(idx) == 0:
+                    continue
+                classification.append(idx[0])
+
             u, c = np.unique(classification, return_counts=True)
             cc = np.zeros(len(combinations))
             cc[u] = c
-            df = {channel: combinations[:, i] for i, channel in enumerate(self.threshold_channel_choices_names)}
-            df['scene'] = scene
-            df['count'] = cc
-            df = pd.DataFrame(df)
-            summery_per_scene.append(df)
+
+            out_df = {channel: combinations[:, i] for i, channel in enumerate(self.threshold_channel_choices_names)}
+            out_df['scene'] = scene
+            out_df['count'] = cc
+            summery_per_scene.append(pd.DataFrame(out_df))
 
         summery_per_scene = pd.concat(summery_per_scene)
-        
+
         writer = pd.ExcelWriter(out_fn, engine='xlsxwriter')
         summery_per_scene.to_excel(writer, sheet_name='summary')
         writer.close()
@@ -3499,10 +3711,7 @@ class ExclusionWidget(QWidget):
                     pickle.dump(self.dataset, f)
             
             elif self.dataset_mode == 'lazy':
-                # Save metadata + DataFrames, update image files if needed
-                import os
-                from pathlib import Path
-                
+                # Save metadata + DataFrames, update image files if needed               
                 # Create same structure as pickle_dataset_for_napari_lazy
                 images_dir = os.path.join(os.path.dirname(new_file_path), 'napari_images')
                 os.makedirs(images_dir, exist_ok=True)
@@ -3570,12 +3779,15 @@ class ExclusionWidget(QWidget):
                 with open(new_file_path, 'wb') as f:
                     pickle.dump(data, f)
 
-        self.select_dataset_widget.value = new_file_path
-        show_info(f"INFO: Saved dataset to {new_file_path}")
 
         new_file_path_csv = new_file_path.replace('.pkl', '.xlsx')
-        self.write_spreadsheets(new_file_path_csv)
+        # self.write_spreadsheets(new_file_path_csv)
         self.write_summary(new_file_path_csv.replace('.xlsx', '_summary.xlsx'))
+
+        show_info(f"INFO: Saved dataset to {new_file_path}")
+
+        # Re-load
+        # self.select_dataset_widget.value = new_file_path
 
 
     def save_summary_only(self):
@@ -3664,23 +3876,6 @@ class ExclusionWidget(QWidget):
 TODOs AND FUTURE IMPROVEMENTS
 ============================================================================
 
-CRITICAL / BUGS:
-----------------
-[ ] TODO: Remove relative imports after debugging (lines 31-36)
-    - Replace sys.path manipulation with proper package imports
-    - Update proc imports to use absolute imports from napari_grid_curator.proc
-
-[ ] TODO: Fix partitions_to_grid function call - seems to be replaced by new_partitions_to_grid
-    - Check if old function can be removed from proc.py
-    - Clean up commented code in proc.py
-
-CODE QUALITY:
--------------
-[ ] TODO: Refactor boilerplate code (see issues below)
-    - Extract repeated layout creation patterns into helper methods
-    - Consolidate similar widget creation logic
-    - Create generic layer update method to reduce duplication
-
 [ ] TODO: Parameterize hardcoded values:
     - batch_size = 100 (line 155)
     - n_cols = 5 (line 159)
@@ -3698,10 +3893,6 @@ CODE QUALITY:
 
 PERFORMANCE:
 ------------
-[ ] TODO: Optimize display updates - only change affected nuclei instead of full refresh
-    - Currently recreates entire included/excluded images on each toggle
-    - Could use boolean indexing to update only specific labels
-
 [ ] TODO: Re-enable and test thread_worker decorators for async operations
     - Currently commented out @thread_worker decorators
     - Test load_dataset and load_scene with threading
@@ -3734,18 +3925,9 @@ FUNCTIONALITY ENHANCEMENTS:
     - Positive counts per marker
     - Real-time updates
 
-[ ] TODO: Add batch threshold adjustment
-    - Apply same threshold to multiple channels at once
-    - Copy thresholds between scenes
-
-[ ] TODO: Add search/filter by label number
-    - Jump to specific nucleus
-    - Highlight matching nuclei
-
 [ ] TODO: Improve error handling
     - More descriptive error messages
     - Validation of dataset structure on load
-    - Graceful handling of missing columns
 
 USER INTERFACE:
 ---------------
@@ -3761,8 +3943,6 @@ USER INTERFACE:
 
 [ ] TODO: Improve histogram visualization:
     - Add legend
-    - Show positive/negative distributions separately
-    - Add statistics (mean, median, std)
     - Make interactive (click to set threshold)
 
 DATA MANAGEMENT:
@@ -3803,8 +3983,6 @@ DOCUMENTATION:
 
 [ ] TODO: Add API documentation for programmatic use
 
-[X] DONE: Document expected pre-processing pipeline output format
-    See detailed documentation below
 
 ============================================================================
 PRE-PROCESSING PIPELINE OUTPUT FORMAT SPECIFICATION
@@ -3983,27 +4161,7 @@ image = scene_data['images'][1]  # shape: (H, W, C)
 ============================================================================
 """
 
-"""
-============================================================================
-TODOs AND FUTURE IMPROVEMENTS (continued)
-============================================================================
 
-NEW FEATURES (FROM USER REQUEST):
----------------------------------
-[X] DONE: Add DAPI-intensity based thresholding slider
-    - Implemented as quick-access filter with checkbox + slider
-    - Filters nuclei below minimum DAPI_inside intensity_mean
-    - Works in conjunction with other exclusion metrics
-    - Auto-adjusts slider range based on data
-
-[X] DONE: Add distance-based exclusion slider  
-    - Implemented as quick-access filter with checkbox + slider
-    - Filters nuclei closer than minimum distance to nearest neighbor
-    - Works in conjunction with other exclusion metrics
-    - Auto-adjusts slider range based on data
-
-============================================================================
-"""
 
 
 # NOTE: keep for debuggung
@@ -4017,11 +4175,10 @@ if __name__ == "__main__":
 
 # Also useful for debugging:
 # # Get the widget from the dock widgets
-# widget = viewer.window._dock_widgets['napari-rgc'].widget()
-# widget = viewer.window._dock_widgets['Dock widget 1'].widget()
+# widget = viewer.window.dock_widgets['Dock widget 1']
 
 # # Or if there are multiple dock widgets, you can iterate:
-# for name, dock_widget in viewer.window._dock_widgets.items():
+# for name, dock_widget in viewer.window.dock_widgets.items():
 #     print(f"{name}: {dock_widget}")
 
 # # Access specific attributes

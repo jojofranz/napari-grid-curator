@@ -279,6 +279,7 @@ class DatasetLoader:
             # 2D .lif-based minimal format
             lif_rel = self.metadata['lif_file']
             lif_full = os.path.join(self.base_dir, lif_rel)
+            print(lif_full, os.path.exists(lif_full))
             if not os.path.exists(lif_full):
                 missing.append(lif_full)
         
@@ -347,7 +348,8 @@ class DatasetLoader:
             crop_size: Size of cropped images (minimal/tiff-based mode)
             display_mode: 'overlay' or 'montage' (minimal mode only)
             projection: Z-projection for 3D data - 'mip', 'middle', 'sum', 'volume'
-            overlay_segmentation: If True, overlay segmentation masks on images (3D only)
+            overlay_segmentation: If True, overlay segmentation boundary on DAPI
+                                 (2D minimal) or segmentation masks (3D)
             zero_out_labels: List of label IDs to exclude from loading
             labels_to_load: Optional list of specific label IDs to load (for batch processing)
         
@@ -406,7 +408,13 @@ class DatasetLoader:
             else:
                 # 2D .lif-based minimal format
                 print(f"Cropping images for scene '{scene_name}' on-the-fly from file {self.dataset[scene_name]['_lif_file']}...")
-                return self._crop_images_minimal(scene_name, batch_labels=labels_to_load, crop_size=crop_size, display_mode=display_mode)
+                return self._crop_images_minimal(
+                    scene_name,
+                    batch_labels=labels_to_load,
+                    crop_size=crop_size,
+                    display_mode=display_mode,
+                    overlay_segmentation=overlay_segmentation,
+                )
         
         raise ValueError(f"Unknown dataset mode: {self.dataset_mode}")
     
@@ -467,7 +475,7 @@ class DatasetLoader:
     
     def _crop_images_minimal(self, scene_name: str, batch_labels: Optional[List[int]] = None, 
                                crop_size: int = 60, display_mode: str = 'overlay',
-                               z_mode: str = 'middle') -> dict:
+                               z_mode: str = 'middle', overlay_segmentation: bool = False) -> dict:
         """
         Crop nucleus images on-the-fly from original .lif file.
         
@@ -478,6 +486,7 @@ class DatasetLoader:
             display_mode: 'overlay' (all channels combined) or 'montage' (channel pairs in grid)
             z_mode: How to handle 3D data - 'middle' (middle slice), 'max' (max projection), 
                    'sum' (sum projection), or int (specific z-index)
+                        overlay_segmentation: If True, overlay current-cell segmentation boundary on DAPI
         
         Returns:
             dict: {label: ndarray} mapping of cropped nucleus images
@@ -486,16 +495,42 @@ class DatasetLoader:
             raise ImportError("aicsimageio is required for minimal format. Install with: pip install aicsimageio")
         
         # Load .lif file
-        lif_path = os.path.join(self.base_dir, self.dataset[scene_name]['_lif_file'])
-        if not os.path.exists(lif_path):
-            raise FileNotFoundError(f".lif file not found: {lif_path}")
-        
-        lif = AICSImage(lif_path)
-        scene_name_in_lif = self.dataset[scene_name]['_scene_name']
-        lif.set_scene(scene_name_in_lif)
-        
-        # Get full scene image
-        full_image = lif.data.squeeze()  # (C, Y, X) or (C, Z, Y, X)
+        try:
+            lif_path = os.path.join(self.base_dir, self.dataset[scene_name]['_lif_file'])
+            if not os.path.exists(lif_path):
+                error_msg = (
+                    f"ERROR: .lif file not found at '{lif_path}'\n\n"
+                    f"This usually happens when:\n"
+                    f"1. The .pkl file was moved to a different location\n"
+                    f"2. The original .lif file was moved or deleted\n"
+                    f"3. The disk/network drive is offline\n\n"
+                    f"Base directory: {self.base_dir}\n"
+                    f"Relative path: {self.dataset[scene_name]['_lif_file']}\n\n"
+                    f"To fix:\n"
+                    f"- Keep the .pkl file in the same directory as the original .lif file, or\n"
+                    f"- Use 'Path Fix' tool in the napari widget to update the paths"
+                )
+                raise FileNotFoundError(error_msg)
+            
+            lif = AICSImage(lif_path)
+            scene_name_in_lif = self.dataset[scene_name]['_scene_name']
+            lif.set_scene(scene_name_in_lif)
+            
+            # Get full scene image
+            full_image = lif.data.squeeze()  # (C, Y, X) or (C, Z, Y, X)
+        except FileNotFoundError:
+            raise
+        except Exception as e:
+            error_msg = (
+                f"ERROR: Failed to load .lif file: {lif_path}\n\n"
+                f"Details: {str(e)}\n\n"
+                f"Possible causes:\n"
+                f"1. File is corrupted or incomplete\n"
+                f"2. aicsimageio cannot read the file format\n"
+                f"3. File requires a library that's not installed\n\n"
+                f"Try: pip install aicsimageio[all] --upgrade"
+            )
+            raise RuntimeError(error_msg) from e
         
         # Load labels
         if self.dataset[scene_name]['_labels'] is None:
@@ -523,6 +558,7 @@ class DatasetLoader:
         
         # Crop each nucleus
         images = {}
+        boundaries = {}
         size = crop_size
         
         for _, row in df_labels.iterrows():
@@ -577,6 +613,27 @@ class DatasetLoader:
             
             # Keep as (C, Y, X) for colorify processing
             images[label] = cropped.astype(full_image.dtype)
+
+            # Optional: compute boundary mask for this specific label (same crop as image)
+            if overlay_segmentation:
+                label_crop = labels[y_start:y_end, x_start:x_end]
+                mask = (label_crop == label)
+
+                # Resize mask to exact crop size if needed (nearest-neighbor)
+                if mask.shape != (size, size):
+                    from skimage.transform import resize
+                    mask = resize(
+                        mask.astype(np.uint8),
+                        (size, size),
+                        preserve_range=True,
+                        order=0,
+                        anti_aliasing=False,
+                    ) > 0.5
+
+                from scipy.ndimage import binary_erosion
+                eroded = binary_erosion(mask)
+                boundary = mask & ~eroded
+                boundaries[label] = boundary
         
         # Convert to RGB using colorify if available
         if COLORIFY_AVAILABLE and len(images) > 0:
@@ -586,44 +643,73 @@ class DatasetLoader:
                 # Default colormaps for common channels
                 n_channels = next(iter(images.values())).shape[0]
                 cmaps = ['pure_blue', 'pure_green', 'pure_red', 'pure_cyan', 'pure_magenta', 'pure_yellow'][:n_channels]
+            else:
+                # Ensure enough colormaps for all channels
+                n_channels = next(iter(images.values())).shape[0]
+                default_cmaps = ['pure_blue', 'pure_green', 'pure_red', 'pure_cyan', 'pure_magenta', 'pure_yellow']
+                cmaps = list(cmaps)
+                if len(cmaps) < n_channels:
+                    cmaps.extend(default_cmaps[len(cmaps):n_channels])
+                elif len(cmaps) > n_channels:
+                    cmaps = cmaps[:n_channels]
             
             # Process each image
             rgba_images = {}
             for label, img in images.items():
                 # img shape: (C, Y, X)
                 n_channels = img.shape[0]
+                boundary_mask = boundaries.get(label, None)
+
+                def _apply_boundary_overlay(rgba_img, boundary):
+                    if boundary is None:
+                        return rgba_img
+                    # White boundary overlay
+                    rgba_img[boundary, 0] = 1.0
+                    rgba_img[boundary, 1] = 1.0
+                    rgba_img[boundary, 2] = 1.0
+                    rgba_img[boundary, 3] = 1.0
+                    return rgba_img
                 
-                if display_mode == 'montage' and n_channels > 1:
-                    # Montage mode: create grid of channel pairs (DAPI + each other channel)
-                    # Grid layout: ceil(sqrt(n_pairs)) x ceil(sqrt(n_pairs))
-                    n_pairs = n_channels - 1  # DAPI + each other channel
-                    grid_cols = int(np.ceil(np.sqrt(n_pairs)))
-                    grid_rows = int(np.ceil(n_pairs / grid_cols))
+                if display_mode == 'montage' and n_channels >= 1:
+                    # Montage mode panels:
+                    # - Panel 0: DAPI only
+                    # - Panel i>0: DAPI + channel i
+                    n_panels = n_channels
+                    grid_cols = int(np.ceil(np.sqrt(n_panels)))
+                    grid_rows = int(np.ceil(n_panels / grid_cols))
                     
                     # Create output grid (Y, X, 4)
                     grid = np.zeros((grid_rows * size, grid_cols * size, 4), dtype=np.float32)
                     
-                    for i in range(n_pairs):
+                    for i in range(n_panels):
                         c = i % grid_cols
                         r = i // grid_cols
                         
-                        # Extract DAPI (channel 0) and current channel (i+1)
-                        pair_channels = [0, i + 1]
-                        pair_img = img[pair_channels]  # (2, Y, X)
-                        pair_cmaps = [cmaps[0], cmaps[i + 1]]
+                        if i == 0:
+                            # First panel: DAPI only
+                            panel_channels = [0]
+                            panel_img = img[panel_channels]  # (1, Y, X)
+                            panel_cmaps = [cmaps[0]]
+                        else:
+                            # Remaining panels: DAPI + channel i
+                            panel_channels = [0, i]
+                            panel_img = img[panel_channels]  # (2, Y, X)
+                            panel_cmaps = [cmaps[0], cmaps[i]]
                         
                         # Compute limits
-                        pair_limits = [[np.percentile(pair_img[ci], 0), np.percentile(pair_img[ci], 100)] 
-                                      for ci in range(2)]
+                        panel_limits = [[np.percentile(panel_img[ci], 0), np.percentile(panel_img[ci], 100)] 
+                                        for ci in range(panel_img.shape[0])]
                         
                         try:
                             converted, _, _, _ = colorify.multichannel_to_rgb(
-                                pair_img,
-                                pair_cmaps,
+                                panel_img,
+                                panel_cmaps,
                                 rescale_type='limits',
-                                limits=pair_limits,
+                                limits=panel_limits,
                                 proj_type='sum'
                             )
+                            if overlay_segmentation and boundary_mask is not None:
+                                converted = _apply_boundary_overlay(converted, boundary_mask)
                             # Place in grid
                             y_start, y_end = r * size, (r + 1) * size
                             x_start, x_end = c * size, (c + 1) * size
@@ -646,6 +732,8 @@ class DatasetLoader:
                             limits=limits,
                             proj_type='sum'
                         )
+                        if overlay_segmentation and boundary_mask is not None:
+                            converted = _apply_boundary_overlay(converted, boundary_mask)
                         # converted shape: (Y, X, 4) with RGBA in [0, 1] float32
                         rgba_images[label] = converted.astype(np.float32)
                     except Exception as e:
@@ -661,7 +749,10 @@ class DatasetLoader:
                             img_normalized = img_normalized[:, :, :3]
                         # Add alpha channel (fully opaque)
                         alpha = np.ones((*img_normalized.shape[:2], 1), dtype=np.float32)
-                        rgba_images[label] = np.concatenate([img_normalized, alpha], axis=-1).astype(np.float32)
+                        converted = np.concatenate([img_normalized, alpha], axis=-1).astype(np.float32)
+                        if overlay_segmentation and boundary_mask is not None:
+                            converted = _apply_boundary_overlay(converted, boundary_mask)
+                        rgba_images[label] = converted
             
             images = rgba_images
         else:
@@ -678,7 +769,14 @@ class DatasetLoader:
                     img_normalized = img_normalized[:, :, :3]
                 # Add alpha channel
                 alpha = np.ones((*img_normalized.shape[:2], 1), dtype=np.float32)
-                rgba_images[label] = np.concatenate([img_normalized, alpha], axis=-1).astype(np.float32)
+                converted = np.concatenate([img_normalized, alpha], axis=-1).astype(np.float32)
+                if overlay_segmentation and label in boundaries:
+                    boundary_mask = boundaries[label]
+                    converted[boundary_mask, 0] = 1.0
+                    converted[boundary_mask, 1] = 1.0
+                    converted[boundary_mask, 2] = 0.0
+                    converted[boundary_mask, 3] = 1.0
+                rgba_images[label] = converted
             images = rgba_images
 
         print(f"Cropped {len(images)} nuclei for scene '{scene_name}' (display_mode={display_mode}).")
@@ -1498,6 +1596,36 @@ class DatasetLoader:
                 if first_img is not None:
                     return first_img.shape[:2]
             return None
+
+    def get_scene_channel_names(self, scene_name: str) -> Optional[List[str]]:
+        """
+        Get channel names for a scene, preferring source image metadata.
+
+        Returns:
+            List of channel names (in image channel order), or None if unavailable.
+        """
+        # 3D file-based minimal datasets may already store channel names
+        if self.dataset_mode == 'minimal' and getattr(self, '_is_3d_file_based', False):
+            names = self.metadata.get('channel_names', None)
+            if names:
+                return [str(n) for n in names]
+
+        # 2D minimal datasets: read from LIF metadata
+        if self.dataset_mode == 'minimal' and AICSIMAGEIO_AVAILABLE:
+            try:
+                lif_path = os.path.join(self.base_dir, self.dataset[scene_name]['_lif_file'])
+                if not os.path.exists(lif_path):
+                    return None
+                lif = AICSImage(lif_path)
+                scene_name_in_lif = self.dataset[scene_name]['_scene_name']
+                lif.set_scene(scene_name_in_lif)
+                names = getattr(lif, 'channel_names', None)
+                if names:
+                    return [str(n) for n in names]
+            except Exception:
+                return None
+
+        return None
     
     def set_channel_cmaps(self, cmaps: List[str]):
         """

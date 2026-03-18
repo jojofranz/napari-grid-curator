@@ -162,7 +162,7 @@ def create_3d_label_montage(segmentations_dict, labels_list, cols=5, padding_wid
     return montage
 
 
-def new_partitions_to_grid_3d(images, segmentations, labels, included_labels, excluded_labels, 
+def partitions_to_grid_3d(images, segmentations, labels, included_labels, excluded_labels, 
                                 cols=5, padding_width=5):
     """
     Create 3D grids of volumetric images and segmentations with included/excluded partitions.
