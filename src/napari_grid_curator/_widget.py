@@ -195,7 +195,7 @@ folder = os.path.dirname(__file__)
 sys.path.append(folder)
 print(folder)
 
-from proc import partition_images, partitions_to_grid, get_new_file_path
+from proc import partition_images, partitions_to_grid, prepare_images_for_grid, get_new_file_path
 from proc_3d import partitions_to_grid_3d
 from dataset_loader import DatasetLoader
 
@@ -604,10 +604,22 @@ class ExclusionWidget(QWidget):
         self.global_dapi_intensity_max = None
         self.global_distance_min = None
         self.global_distance_max = None
+        self.area_min_threshold = 0  # Minimum nucleus area (px, DAPI_inside 'area') for inclusion
+        self.apply_area_filter = False
+        self.global_area_min = None
+        self.global_area_max = None
 
         self.setup_ui()
         self.viewer = viewer
         self.viewer.reset_view()
+
+        # Keybinding: toggle the segmentation boundary overlay. Flips the checkbox, so the UI
+        # stays in sync and the normal handler runs. 'C' (contour) is unused by napari defaults.
+        @self.viewer.bind_key('C', overwrite=True)
+        def _toggle_boundary_overlay_key(viewer):
+            self.overlay_segmentation_checkbox.setChecked(
+                not self.overlay_segmentation_checkbox.isChecked()
+            )
 
 
         @self.viewer.mouse_drag_callbacks.append
@@ -922,6 +934,7 @@ class ExclusionWidget(QWidget):
         main_layout.addLayout(self.choose_exclusion_metrics_layout())
         main_layout.addLayout(self.dapi_intensity_filter_layout())
         main_layout.addLayout(self.distance_filter_layout())
+        main_layout.addLayout(self.area_filter_layout())
         main_layout.addWidget(self.create_horizontal_divider())
         
         # Group 3: Thresholding and saving
@@ -1357,7 +1370,8 @@ class ExclusionWidget(QWidget):
 
         # Optional segmentation boundary overlay on DAPI channel
         boundary_layout = QHBoxLayout()
-        self.overlay_segmentation_checkbox = QCheckBox("Overlay segmentation boundary on DAPI")
+        self.overlay_segmentation_checkbox = QCheckBox("Overlay segmentation boundary on DAPI [C]")
+        self.overlay_segmentation_checkbox.setToolTip("Toggle with the 'C' key (while the viewer has focus)")
         self.overlay_segmentation_checkbox.setChecked(False)
         self.overlay_segmentation_checkbox.stateChanged.connect(self.toggle_segmentation_boundary_overlay)
         boundary_layout.addWidget(self.overlay_segmentation_checkbox)
@@ -1632,7 +1646,37 @@ class ExclusionWidget(QWidget):
             callback=self.update_distance_filter
         )
         main_layout.addWidget(self.distance_slider)
-        
+
+        return main_layout
+
+    def area_filter_layout(self):
+        """
+        Create layout for minimum nucleus size filtering.
+
+        Excludes nuclei whose area (in pixels, 'area' of the 'DAPI_inside' rows) is
+        below the threshold. The exclusion is applied to all channel rows of that label.
+
+        Returns:
+            QHBoxLayout: Layout containing checkbox and slider+spinbox
+        """
+        from qtpy.QtWidgets import QCheckBox
+
+        main_layout = QHBoxLayout()
+
+        self.area_filter_checkbox = QCheckBox("Min area (px)")
+        self.area_filter_checkbox.setChecked(False)
+        self.area_filter_checkbox.stateChanged.connect(self.toggle_area_filter)
+        main_layout.addWidget(self.area_filter_checkbox)
+
+        self.area_slider = SliderSpinBox(
+            value=0,
+            min_val=0,
+            max_val=1000,  # Will be updated based on data range
+            step=1,
+            callback=self.update_area_filter
+        )
+        main_layout.addWidget(self.area_slider)
+
         return main_layout
             
 
@@ -2276,9 +2320,21 @@ class ExclusionWidget(QWidget):
             if self.downsampling_factor > 1:
                 def downsample_image(label_img_tuple):
                     label, img = label_img_tuple
+                    factor = 1 / self.downsampling_factor
+                    if img.ndim == 2:
+                        zoom = (factor, factor)
+                    elif img.ndim == 3:
+                        if img.shape[-1] in (1, 2, 3, 4):
+                            zoom = (factor, factor, 1)
+                        elif img.shape[0] in (1, 2, 3, 4):
+                            zoom = (1, factor, factor)
+                        else:
+                            zoom = (factor, factor, 1)
+                    else:
+                        zoom = tuple([factor] * img.ndim)
                     downsampled = scipy.ndimage.zoom(
                         img, 
-                        (1/self.downsampling_factor, 1/self.downsampling_factor, 1), 
+                        zoom,
                         order=3, 
                         mode='nearest'
                     )
@@ -2301,6 +2357,7 @@ class ExclusionWidget(QWidget):
             # Get unique labels for grid
             # After dataset loading, 'label' is always the correct column (instance_label was renamed to label for relabel mode)
             labels = df['label'].drop_duplicates().values.astype(int)
+            images = prepare_images_for_grid(images, labels)
             
             # Store actual tile dimensions from loaded images (accounts for montage mode)
             # In montage mode, each image is already arranged as channel grid, so shape reflects that
@@ -2955,6 +3012,18 @@ class ExclusionWidget(QWidget):
         if self.apply_distance_filter and self.dataset is not None:
             self.apply_quality_filters()
 
+    def toggle_area_filter(self, state):
+        """Enable/disable minimum nucleus area filtering (state: 0=unchecked, 2=checked)."""
+        self.apply_area_filter = (state == 2)
+        if self.dataset is not None:
+            self.apply_quality_filters()
+
+    def update_area_filter(self, value):
+        """Update minimum nucleus area threshold (in pixels)."""
+        self.area_min_threshold = value
+        if self.apply_area_filter and self.dataset is not None:
+            self.apply_quality_filters()
+
     def _initialize_quality_filter_slider_ranges(self):
         """
         Compute global min/max for quick quality filters once per dataset load.
@@ -2967,6 +3036,7 @@ class ExclusionWidget(QWidget):
 
         dapi_values = []
         distance_values = []
+        area_values = []
         distance_cols = ['distance to nearest neighbour', 'distance to border']
 
         for scene in self.scene_choices:
@@ -2980,6 +3050,12 @@ class ExclusionWidget(QWidget):
                 dapi_scene = df.loc[df['channel'] == 'DAPI_inside', 'intensity_mean'].dropna()
                 if len(dapi_scene) > 0:
                     dapi_values.append(dapi_scene.to_numpy())
+
+            # Global nucleus area range from DAPI_inside / area
+            if 'channel' in df.columns and 'area' in df.columns:
+                area_scene = df.loc[df['channel'] == 'DAPI_inside', 'area'].dropna()
+                if len(area_scene) > 0:
+                    area_values.append(area_scene.to_numpy())
 
             # Global distance range across available distance columns
             for distance_col in distance_cols:
@@ -3037,6 +3113,28 @@ class ExclusionWidget(QWidget):
         else:
             print("WARNING: Could not initialize distance filter range (no distance columns found)")
 
+        # Configure area slider bounds (starts at 0: "no minimum" must always be reachable)
+        if area_values:
+            all_area = np.concatenate(area_values)
+            area_min = 0
+            area_max = int(np.ceil(np.max(all_area)))
+            if area_max <= area_min:
+                area_max = area_min + 1
+            area_max = area_max + int(np.floor(area_max * .1))  # add 10% margin
+
+            self.global_area_min = area_min
+            self.global_area_max = area_max
+            self.area_slider.setMinimum(area_min)
+            self.area_slider.setMaximum(area_max)
+
+            clamped_area = int(np.clip(self.area_min_threshold, area_min, area_max))
+            self.area_min_threshold = clamped_area
+            self.area_slider.value = clamped_area
+
+            print(f"Initialized global area filter range: [{area_min}, {area_max}]")
+        else:
+            print("WARNING: Could not initialize area filter range (no DAPI_inside/area data found)")
+
     def apply_quality_filters(self):
         """
         Apply DAPI intensity and/or distance filters to all scenes (NEW FEATURE).
@@ -3085,6 +3183,16 @@ class ExclusionWidget(QWidget):
                         # Distance is typically the same across channels for a given label
                         close_nuclei = df[distance_col] < self.distance_min_threshold
                         exclude |= close_nuclei.values
+
+            # Apply minimum area filter if enabled
+            if self.apply_area_filter:
+                # Filter on DAPI_inside channel 'area' (nucleus area in px)
+                dapi_mask = df['channel'] == 'DAPI_inside'
+                if dapi_mask.any() and 'area' in df.columns:
+                    small = dapi_mask & (df['area'] < self.area_min_threshold)
+                    # Propagate exclusion to all channels for same label
+                    labels_to_exclude = df.loc[small, 'label'].unique()
+                    exclude |= df['label'].isin(labels_to_exclude).values
             
             df['exclude'] = exclude
             self.dataset[scene]['df'] = df
@@ -3844,6 +3952,8 @@ class ExclusionWidget(QWidget):
                 layer.data = data
                 layer.visible = visible
                 layer.translate = translate
+                if layer_type == 'image':
+                    self._set_scalar_image_contrast_limits(layer, data)
                 if layer_type == 'points':
                     if features is not None:
                         layer.features = features
@@ -3860,7 +3970,8 @@ class ExclusionWidget(QWidget):
                 return layer
 
         if layer_type == 'image':
-            viewer.add_image(data, name=name, visible=visible, translate=translate)
+            layer = viewer.add_image(data, name=name, visible=visible, translate=translate)
+            self._set_scalar_image_contrast_limits(layer, data)
         elif layer_type == 'labels':
             viewer.add_labels(data, name=name, visible=visible, translate=translate)
         elif layer_type == 'points':
@@ -3868,6 +3979,22 @@ class ExclusionWidget(QWidget):
                 viewer.add_points(data, name=name, visible=visible, translate=translate, border_width=0, features=features)
             else:
                 viewer.add_points(data, name=name, visible=visible, translate=translate, border_width=0, features=features, text=text, face_color=face_color)
+
+    def _set_scalar_image_contrast_limits(self, layer, data):
+        """Set contrast limits for scalar microscopy images without touching RGB(A)."""
+        data = np.asarray(data)
+        is_rgb_like = data.ndim >= 3 and data.shape[-1] in (3, 4)
+        if is_rgb_like or data.size == 0:
+            return
+
+        finite = data[np.isfinite(data)]
+        if finite.size == 0:
+            return
+
+        low = float(np.min(finite))
+        high = float(np.max(finite))
+        if high > low:
+            layer.contrast_limits = (low, high)
 
 
 

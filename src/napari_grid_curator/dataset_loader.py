@@ -36,6 +36,19 @@ except ImportError:
     AICSIMAGEIO_AVAILABLE = False
 
 
+class _NumpyCompatUnpickler(pickle.Unpickler):
+    """Load NumPy pickles across the numpy.core/numpy._core rename."""
+
+    def find_class(self, module, name):
+        if module.startswith('numpy._core'):
+            module = module.replace('numpy._core', 'numpy.core', 1)
+        return super().find_class(module, name)
+
+
+def _load_pickle(file_obj):
+    return _NumpyCompatUnpickler(file_obj).load()
+
+
 class DatasetLoader:
     """
     Multi-format dataset loader with path validation.
@@ -63,7 +76,7 @@ class DatasetLoader:
         
         # Load and detect format
         with open(file_path, 'rb') as f:
-            data = pickle.load(f)
+            data = _load_pickle(f)
         
         self._detect_format(data)
         self._initialize_dataset(data)
@@ -390,7 +403,7 @@ class DatasetLoader:
             
             print(f"Loading images for scene '{scene_name}' from {full_path}...")
             with open(full_path, 'rb') as f:
-                images = pickle.load(f)
+                images = _load_pickle(f)
             
             self.dataset[scene_name]['images'] = images
             return images

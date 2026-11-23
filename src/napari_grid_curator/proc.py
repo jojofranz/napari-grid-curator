@@ -28,6 +28,82 @@ import numpy as np
 import skimage
 
 
+def as_channel_last_image(image):
+    """
+    Return an image as (Y, X, C) without duplicating single-channel data.
+
+    Raw 2D crops become (Y, X, 1) via ``[..., np.newaxis]``. This adds a
+    channel axis as a view, unlike repeating a grayscale crop into RGB.
+    Channel-first images with a small leading channel axis, e.g. (1, Y, X),
+    are moved to channel-last for skimage's montage function.
+    """
+    image = np.asarray(image)
+
+    if image.ndim == 2:
+        return image[..., np.newaxis]
+
+    if image.ndim == 3:
+        if image.shape[-1] in (1, 2, 3, 4):
+            return image
+        if image.shape[0] in (1, 2, 3, 4):
+            return np.moveaxis(image, 0, -1)
+
+    return image
+
+
+def prepare_images_for_grid(images, labels=None, pad_value=0):
+    """
+    Normalize image arrays for 2D montage display.
+
+    This keeps datasets on disk in their native crop sizes and pads only the
+    currently displayed batch/scene immediately before visualization.
+    """
+    if labels is None:
+        labels = list(images.keys())
+
+    prepared = {}
+    max_y = 0
+    max_x = 0
+    max_c = 0
+
+    for label in labels:
+        if label not in images:
+            continue
+        image = as_channel_last_image(images[label])
+        if image.ndim != 3:
+            raise ValueError(
+                f"Expected a 2D image or 3D channel image for label {label}, "
+                f"got shape {image.shape}"
+            )
+        prepared[label] = image
+        max_y = max(max_y, image.shape[0])
+        max_x = max(max_x, image.shape[1])
+        max_c = max(max_c, image.shape[2])
+
+    padded = {}
+    for label, image in prepared.items():
+        pad_y = max_y - image.shape[0]
+        pad_x = max_x - image.shape[1]
+        pad_c = max_c - image.shape[2]
+        pad_width = (
+            (pad_y // 2, pad_y - pad_y // 2),
+            (pad_x // 2, pad_x - pad_x // 2),
+            (0, pad_c),
+        )
+        if any(before or after for before, after in pad_width):
+            image = np.pad(image, pad_width, mode='constant', constant_values=pad_value)
+        padded[label] = image
+
+    return padded
+
+
+def _montage_fill_value(image):
+    """Choose a fill value that does not compress raw grayscale contrast."""
+    if image.shape[-1] == 1 and np.issubdtype(image.dtype, np.integer):
+        return np.zeros(1, dtype=image.dtype)
+    return np.ones(image.shape[-1], dtype=image.dtype)
+
+
 def partition_images(df):
     """
     Partition labels from a DataFrame into included and excluded images.
@@ -92,23 +168,35 @@ def partitions_to_grid(images, labels, included_labels, excluded_labels, cols = 
     # included_labels = np.unique(included_labels, sorted=False)
     # excluded_labels = np.unique(excluded_labels, sorted=False)
 
+    labels = np.array([label for label in labels if label in images])
+    images = prepare_images_for_grid(images, labels)
+
     rows = int(np.ceil(len(images) / cols))
     # print(f'images keys: {np.sort(list(images.keys()))}')
     # print(f'labels: {np.sort(list(labels))}')
     # print(f'union of included and excluded labels: {np.sort(np.union1d(included_labels, excluded_labels))}')
     all_images = [images[label] for label in labels]
-    single_tile = np.ones_like(images[list(images.keys())[0]])[..., 0].astype(np.uint16)
+    first_image = images[list(images.keys())[0]]
+    single_tile = np.ones(first_image.shape[:2], dtype=np.uint16)
     all_labels = [single_tile*label for label in labels]
+    fill = _montage_fill_value(first_image)
     all_images_grid = skimage.util.montage(all_images, grid_shape=(rows, cols), channel_axis=3,
-                                           fill = [1, 1, 1, 1], padding_width = padding_width)
+                                           fill = fill, padding_width = padding_width)
     all_labels = skimage.util.montage(all_labels, grid_shape=(rows, cols),
                                       fill=0, padding_width = padding_width)
     all_labels = all_labels.astype(np.uint16)
 
+    # ``skimage.util.montage`` requires a channel axis, but napari displays raw
+    # single-channel microscopy data more naturally as scalar 2D data. Squeeze
+    # the synthetic singleton channel back out after montage so uint16 contrast
+    # is preserved and the layer is not interpreted as a one-slice volume.
+    if all_images_grid.ndim == 3 and all_images_grid.shape[-1] == 1:
+        all_images_grid = all_images_grid[..., 0]
+
     coords = np.array(np.meshgrid(np.arange(rows), np.arange(cols))).T.reshape(-1, 2) + .5
     coords = coords[:len(labels)]
-    coords[:, 0] *= list(images.values())[0].shape[0] + padding_width
-    coords[:, 1] *= list(images.values())[0].shape[1] + padding_width
+    coords[:, 0] *= first_image.shape[0] + padding_width
+    coords[:, 1] *= first_image.shape[1] + padding_width
 
     included_images = all_images_grid.copy()
     included_images[np.isin(all_labels, excluded_labels)] = 0
