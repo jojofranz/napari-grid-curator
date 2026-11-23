@@ -127,17 +127,22 @@ Each filter is switched on with its checkbox. A nucleus excluded by a filter is 
 ### Small screens: smaller napari menus
 
 On small laptop screens the napari menus and the Grid Curator widget may not fit.
-[`scripts/napari_scaled.py`](https://github.com/jojofranz/napari-grid-curator/blob/main/scripts/napari_scaled.py) starts napari with a custom Qt scale factor
-(`QT_SCALE_FACTOR`), which shrinks all menus and widgets:
+[`scripts/napari_scaled.py`](https://github.com/jojofranz/napari-grid-curator/blob/main/scripts/napari_scaled.py)
+starts napari with a smaller UI:
 
 ```bash
-python scripts/napari_scaled.py                  # scale 0.7 (default)
-python scripts/napari_scaled.py --scale 0.8      # 1.0 = normal size
+python scripts/napari_scaled.py                  # napari font size 7 (napari default: 9)
+python scripts/napari_scaled.py --font-size 8
+python scripts/napari_scaled.py --scale 0.8      # also shrink everything via QT_SCALE_FACTOR
 python scripts/napari_scaled.py --plugin         # also open the Grid Curator widget
 ```
 
-Alternatively, set the environment variable yourself before starting napari, e.g.
-`set QT_SCALE_FACTOR=0.7` (Windows cmd) or `export QT_SCALE_FACTOR=0.7` (Linux/macOS), then run `napari`.
+- `--font-size` uses napari's own font setting, works on any screen and only affects this session.
+  It can also be set permanently in napari under *File > Preferences > Appearance*.
+- `--scale` sets `QT_SCALE_FACTOR`. It only works on screens with OS display scaling (e.g. a laptop
+  at 125-150% in Windows display settings): the factor times the display scaling must stay >= 1.
+  On a 100% screen, values below 1 make menus and widgets render incompletely. The script warns
+  if that happens.
 
 ### Supported Dataset Formats
 

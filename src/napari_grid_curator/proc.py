@@ -98,10 +98,14 @@ def prepare_images_for_grid(images, labels=None, pad_value=0):
 
 
 def _montage_fill_value(image):
-    """Choose a fill value that does not compress raw grayscale contrast."""
+    """Choose a fill value that does not compress raw grayscale contrast.
+
+    Returned as a plain list (one value per channel): scikit-image >= 0.25 compares
+    ``fill == 'mean'``, which raises for a numpy array.
+    """
     if image.shape[-1] == 1 and np.issubdtype(image.dtype, np.integer):
-        return np.zeros(1, dtype=image.dtype)
-    return np.ones(image.shape[-1], dtype=image.dtype)
+        return np.zeros(1, dtype=image.dtype).tolist()
+    return np.ones(image.shape[-1], dtype=image.dtype).tolist()
 
 
 def partition_images(df):
