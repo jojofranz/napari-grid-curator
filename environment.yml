@@ -1,0 +1,19 @@
+# Conda/mamba environment for napari-grid-curator.
+#
+#   mamba env create -f environment.yml      (or: conda env create -f environment.yml)
+#   mamba activate napari-grid-curator
+#   napari
+#
+# napari and the Qt backend come from conda-forge, the plugin from PyPI.
+name: napari-grid-curator
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - napari>=0.5,<0.7   # Qt5-compatible (the plugin uses matplotlib's Qt5 backend)
+  - pyqt=5
+  - libblas=*=*openblas   # MKL builds crashed on import on Windows (tested 2026-11)
+  - numcodecs<0.16   # aicsimageio pins zarr<2.16, which breaks with numcodecs>=0.16
+  - pip
+  - pip:
+      - napari-grid-curator

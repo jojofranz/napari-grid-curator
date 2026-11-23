@@ -1,0 +1,26 @@
+# Development environment for napari-grid-curator.
+#
+# Run from the repo root: a local clone, or on the network share via its UNC path
+# (\\ca-nas101...\napari_grid_curator in PowerShell). Building from the Z: drive letter fails.
+#   mamba env create -f environment-dev.yml
+#   mamba activate napari-grid-curator-dev
+#   pytest src/napari_grid_curator/_tests
+#
+# Pins: see environment.yml.
+name: napari-grid-curator-dev
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - napari>=0.5,<0.7      # Qt5-compatible (the plugin uses matplotlib's Qt5 backend)
+  - pyqt=5
+  - libblas=*=*openblas   # MKL builds crashed on import on Windows (tested 2026-11)
+  - numcodecs<0.16        # aicsimageio pins zarr<2.16, which breaks with numcodecs>=0.16
+  - pip
+  - jupyterlab            # optional, for notebooks
+  - pytest
+  - pytest-qt
+  - python-build
+  - twine
+  - pip:
+      - -e .              # editable install of the plugin from this folder

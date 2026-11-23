@@ -25,12 +25,17 @@ classifiers = [
 requires-python = ">=3.9"
 dependencies = [
     "numpy",
+    "scipy",
+    "pandas",
+    "scikit-image",
+    "matplotlib",
     "magicgui",
     "qtpy",
     "QtAwesome", 
     "napari", 
     "xlsxwriter",
     "zarr",
+    "numcodecs<0.16",  # aicsimageio pins zarr<2.16, which breaks with numcodecs>=0.16
     "microfilm",
     "aicsimageio",
     "readlif>=0.6.4",

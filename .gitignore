@@ -82,3 +82,9 @@ venv/
 
 # written by setuptools_scm
 **/_version.py
+
+# Local side-project data (not part of the plugin)
+virginia/
+
+# Local release notes
+RELEASING.md
